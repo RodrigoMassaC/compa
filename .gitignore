@@ -1,0 +1,48 @@
+# Variables de entorno — NUNCA subir al repositorio
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite (solo desarrollo local)
+*.db
+*.sqlite3
+
+# Alembic — no versionar la carpeta __pycache__ interna
+alembic/__pycache__/
+
+# Playwright
+playwright/.auth/
+
+# Node / Frontend (Fase 2)
+node_modules/
+.next/
+.nuxt/
+dist/
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+*.log
+celerybeat-schedule
+celerybeat.pid
