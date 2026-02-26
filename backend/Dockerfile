@@ -2,7 +2,7 @@
 # Compa API — Imagen Docker basada en Python 3.11 slim
 # ============================================================
 
-FROM python:3.11-slim
+FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
 # Metadatos
 LABEL maintainer="compa-team"
