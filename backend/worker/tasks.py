@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from worker.celery_app import celery_app
 from app.core.config import settings
+from app.services.ai_agent.tools.normalizer import ProductNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -117,4 +118,28 @@ def fetch_bcv_rate(self) -> dict:
     except Exception as exc:
         logger.error(f"[BCV] Error al obtener tasa: {exc}")
         # Reintentar automáticamente hasta 3 veces
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(
+    name="worker.tasks.normalize_pending_products",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=120,  # Reintentar en 2 mins si hay problema de API
+)
+def normalize_pending_products(self) -> dict:
+    """
+    Tarea que ejecuta la normalización de productos usando IA (Claude).
+    Procesa lotes de 20 productos_crudos PENDIENTES.
+    Se ejecuta automáticamente cada 6 horas vía Celery Beat o de forma manual.
+    """
+    try:
+        logger.info("[NORM_IA] Iniciando tarea de normalización con Claude (lote de 20)...")
+        normalizer = ProductNormalizer(batch_size=20)
+        resultado = asyncio.run(normalizer.run())
+        
+        logger.info(f"[NORM_IA] Tarea finalizada. Stats: {resultado}")
+        return resultado
+    except Exception as exc:
+        logger.error(f"[NORM_IA] Error fatal en tarea de normalización: {exc}")
         raise self.retry(exc=exc)

@@ -36,4 +36,8 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=10, minute=0),  # UTC (= 6:00 AM UTC-4)
         "options": {"queue": "cron"},
     },
+    "normalize-products-every-6-hours": {
+        "task": "worker.tasks.normalize_pending_products",
+        "schedule": crontab(minute=0, hour="*/6"), # Ejecutar en horas divisibles por 6 (0, 6, 12, 18)
+    },
 }
