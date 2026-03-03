@@ -95,7 +95,7 @@ def fetch_bcv_rate(self) -> dict:
         logger.info(f"[BCV] Iniciando descarga de tasa — {datetime.utcnow()}")
 
         # Obtener la página del BCV de forma síncrona (Celery no es async)
-        with httpx.Client(timeout=30, headers=headers) as client:
+        with httpx.Client(timeout=30, headers=headers, verify=False) as client:
             response = client.get(bcv_url)
             response.raise_for_status()
 

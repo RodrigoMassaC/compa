@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import check_db_connection
+from app.api.v1.router import api_router
 
 
 # ── Ciclo de vida de la aplicación ──
@@ -29,6 +30,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# ── Montar Routers ──
+app.include_router(api_router, prefix="/api/v1")
 
 # ── CORS (permitir cualquier origen en desarrollo) ──
 app.add_middleware(
