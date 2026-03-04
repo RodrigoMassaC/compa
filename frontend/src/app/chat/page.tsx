@@ -76,8 +76,23 @@ const RobotIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+interface ChatProduct {
+  nombre?: string;
+  marca?: string;
+  presentacion?: string;
+  ofertas?: { precio_usd?: number; precio_ves?: number }[];
+  [key: string]: unknown;
+}
+
+interface ChatMessage {
+  role: "user" | "agent";
+  type?: "text" | "results";
+  content: string;
+  products?: ChatProduct[];
+}
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -88,7 +103,7 @@ export default function ChatPage() {
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
-    const userMsg = { role: "user", content: inputValue };
+    const userMsg: ChatMessage = { role: "user", content: inputValue };
     setMessages((prev) => [...prev, userMsg]);
     setInputValue("");
     setIsTyping(true);
@@ -120,7 +135,7 @@ export default function ChatPage() {
           },
         ]);
       }
-    } catch (error) {
+    } catch {
       setIsTyping(false);
       setMessages((prev) => [
         ...prev,
@@ -264,7 +279,7 @@ export default function ChatPage() {
                           </div>
 
                           <div className="space-y-4 mb-6">
-                            {msg.products.slice(0, 3).map((prod: any, idx: number) => (
+                            {msg.products.slice(0, 3).map((prod: ChatProduct, idx: number) => (
                               <div key={idx} className="flex justify-between items-start">
                                 <div>
                                   <div className="font-bold text-slate-800 text-[15px]">{prod.nombre}</div>
@@ -281,7 +296,7 @@ export default function ChatPage() {
                           <div className="bg-[#fffdf5] border border-[#fef3d5] rounded-2xl p-4 flex justify-between items-center mb-5">
                             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Estimado</span>
                             <div className="font-extrabold text-xl text-slate-800">
-                              ${msg.products.reduce((acc: number, p: any) => acc + (p.ofertas?.[0]?.precio_usd || 0), 0).toFixed(2)}
+                              ${msg.products.reduce((acc: number, p: ChatProduct) => acc + (p.ofertas?.[0]?.precio_usd || 0), 0).toFixed(2)}
                             </div>
                           </div>
 

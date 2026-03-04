@@ -1,4 +1,4 @@
-import { Producto, Oferta } from '@/lib/api';
+import { Producto } from '@/lib/api';
 
 export default function ProductCard({ producto }: { producto: Producto }) {
     const ofertasOrdenadas = [...producto.ofertas].sort((a, b) => {
