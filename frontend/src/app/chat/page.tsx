@@ -2,86 +2,113 @@
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 
+// ── Icons ──────────────────────────────────────────────────────────────────
 const PiggyBankIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
   </svg>
 );
-
 const ChatIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
   </svg>
 );
-
 const ClockIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
   </svg>
 );
-
 const PinIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
     <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
   </svg>
 );
-
 const RefreshIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
   </svg>
 );
-
 const ImageIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
   </svg>
 );
-
 const MicIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
   </svg>
 );
-
 const SendIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
   </svg>
 );
-
-const CheckIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-  </svg>
-);
-
 const SettingsIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
     <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
   </svg>
 );
-
 const UserIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
   </svg>
 );
-
 const RobotIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
   </svg>
 );
+const TagIcon = ({ className }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+  </svg>
+);
+
+// ── Markdown renderer simple ───────────────────────────────────────────────
+function renderMarkdown(text: string): React.ReactNode[] {
+  const lines = text.split("\n");
+  const result: React.ReactNode[] = [];
+
+  lines.forEach((line, i) => {
+    // Procesar negritas **texto** dentro de cada línea
+    const parts = line.split(/(\*\*[^*]+\*\*)/g);
+    const rendered = parts.map((part, j) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={j} className="font-bold text-slate-800">{part.slice(2, -2)}</strong>;
+      }
+      return part;
+    });
+
+    if (line.trim() === "") {
+      result.push(<br key={i} />);
+    } else if (line.startsWith("- ")) {
+      result.push(
+        <li key={i} className="ml-4 list-disc text-slate-600">{rendered.map((p, j) =>
+          typeof p === "string" ? p.slice(j === 0 ? 2 : 0) : p
+        )}</li>
+      );
+    } else {
+      result.push(<span key={i} className="block">{rendered}</span>);
+    }
+  });
+
+  return result;
+}
+
+// ── Tipos ──────────────────────────────────────────────────────────────────
+interface Oferta {
+  tienda: string;
+  precio_usd?: number;
+  precio_ves?: number;
+}
 
 interface ChatProduct {
   nombre?: string;
   marca?: string;
   presentacion?: string;
-  ofertas?: { precio_usd?: number; precio_ves?: number }[];
-  [key: string]: unknown;
+  ofertas?: Oferta[];
 }
 
 interface ChatMessage {
@@ -91,6 +118,75 @@ interface ChatMessage {
   products?: ChatProduct[];
 }
 
+// ── Componente tarjeta de producto ─────────────────────────────────────────
+function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: boolean }) {
+  const ofertas = product.ofertas || [];
+  const precioMin = ofertas.reduce((min, o) =>
+    (o.precio_usd ?? 9999) < (min.precio_usd ?? 9999) ? o : min,
+    ofertas[0] || {}
+  );
+
+  return (
+    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst ? "border-[#6abf9a]" : "border-[#f0f0f0]"}`}>
+      {/* Encabezado del producto */}
+      <div className="flex justify-between items-start mb-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            {isFirst && (
+              <span className="bg-[#e8f8f1] text-[#34a87a] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                Mejor precio
+              </span>
+            )}
+          </div>
+          <div className="font-bold text-slate-800 text-[15px] mt-1">{product.nombre}</div>
+          <div className="text-xs text-slate-400 mt-0.5">
+            {[product.marca, product.presentacion].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+        <div className="text-right ml-4">
+          <div className="font-extrabold text-slate-800 text-lg">
+            ${precioMin.precio_usd?.toFixed(2) ?? "—"}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {precioMin.precio_ves?.toLocaleString("es-VE", { minimumFractionDigits: 2 }) ?? "—"} Bs
+          </div>
+          {precioMin.tienda && (
+            <div className="text-[10px] text-[#6abf9a] font-bold mt-0.5">{precioMin.tienda}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Comparación de tiendas si hay más de una */}
+      {ofertas.length > 1 && (
+        <div className="border-t border-slate-50 pt-3 mt-2">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+            Comparar precios ({ofertas.length} tiendas)
+          </div>
+          <div className="space-y-1.5">
+            {ofertas.map((oferta, idx) => (
+              <div key={idx} className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <TagIcon className="w-3 h-3 text-slate-300" />
+                  <span className="text-xs text-slate-600 font-medium">{oferta.tienda}</span>
+                </div>
+                <div className="text-right">
+                  <span className={`text-xs font-bold ${idx === 0 ? "text-[#34a87a]" : "text-slate-600"}`}>
+                    ${oferta.precio_usd?.toFixed(2) ?? "—"}
+                  </span>
+                  <span className="text-[10px] text-slate-400 ml-1">
+                    ({oferta.precio_ves?.toLocaleString("es-VE", { minimumFractionDigits: 0 }) ?? "—"} Bs)
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Página principal ───────────────────────────────────────────────────────
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -108,7 +204,6 @@ export default function ChatPage() {
     setInputValue("");
     setIsTyping(true);
 
-    // Construir historial para el agente
     const historial = messages.map((m) => ({
       role: m.role === "agent" ? "assistant" : "user",
       content: m.content,
@@ -123,7 +218,7 @@ export default function ChatPage() {
       const data = await response.json();
       setIsTyping(false);
 
-      if (data && data.respuesta) {
+      if (data?.respuesta) {
         setMessages((prev) => [
           ...prev,
           {
@@ -134,25 +229,17 @@ export default function ChatPage() {
           },
         ]);
       } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "agent",
-            type: "text",
-            content: "Lo siento, no pude procesar tu consulta en este momento.",
-          },
-        ]);
+        setMessages((prev) => [...prev, {
+          role: "agent", type: "text",
+          content: "Lo siento, no pude procesar tu consulta en este momento.",
+        }]);
       }
     } catch {
       setIsTyping(false);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "agent",
-          type: "text",
-          content: "Hubo un error de conexión con el servidor. Verifica que el backend esté corriendo.",
-        },
-      ]);
+      setMessages((prev) => [...prev, {
+        role: "agent", type: "text",
+        content: "Hubo un error de conexión con el servidor. Verifica que el backend esté corriendo.",
+      }]);
     }
   };
 
@@ -246,16 +333,30 @@ export default function ChatPage() {
         {/* Mensajes */}
         <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-20 flex flex-col items-center">
           <div className="w-full max-w-3xl flex flex-col gap-6">
+
+            {/* Estado vacío */}
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center mt-20 text-slate-400">
                 <div className="bg-[#bdf0db] w-16 h-16 rounded-full flex items-center justify-center text-[#34a87a] mb-4">
                   <PiggyBankIcon className="w-8 h-8" />
                 </div>
                 <p className="font-medium text-lg">¿Qué vamos a comprar hoy?</p>
-                <p className="text-sm mt-2">Pregúntame sobre precios en Farmatodo y más tiendas.</p>
+                <p className="text-sm mt-2">Pregúntame sobre precios en supermercados y farmacias.</p>
+                <div className="flex flex-wrap gap-2 mt-6 justify-center">
+                  {["¿Dónde consigo leche más barata?", "Precio del arroz", "Medicamentos para la gripe"].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInputValue(s)}
+                      className="bg-white border border-[#e5e5e5] shadow-sm rounded-full px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
+            {/* Mensajes */}
             {messages.map((msg, i) => (
               <div key={i} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 {msg.role === "user" ? (
@@ -268,59 +369,28 @@ export default function ChatPage() {
                       <RobotIcon className="w-6 h-6" />
                     </div>
                     <div className="flex-1">
+                      {/* Texto con markdown renderizado */}
                       <div className="text-slate-700 text-[15px] leading-relaxed font-medium mb-3">
-                        {msg.content}
+                        {renderMarkdown(msg.content)}
                       </div>
 
-                      {msg.type === "results" && msg.products && (
-                        <div className="bg-white border border-[#f0f0f0] rounded-3xl p-6 shadow-sm mb-3">
-                          <div className="flex justify-between items-center mb-5 pb-4 border-b border-slate-50">
-                            <div className="flex items-center gap-2 font-bold text-[15px]">
-                              <div className="bg-[#6abf9a] text-white w-5 h-5 rounded-full flex items-center justify-center">
-                                <CheckIcon className="w-3.5 h-3.5" />
-                              </div>
-                              Opción A: Todo en un solo lugar
-                            </div>
-                            <div className="bg-[#7ec9ab] rounded-full text-white text-[10px] font-extrabold px-3 py-1 uppercase tracking-wider">
-                              Mejor Valor
-                            </div>
-                          </div>
-
-                          <div className="space-y-4 mb-6">
-                            {msg.products.slice(0, 3).map((prod: ChatProduct, idx: number) => (
-                              <div key={idx} className="flex justify-between items-start">
-                                <div>
-                                  <div className="font-bold text-slate-800 text-[15px]">{prod.nombre}</div>
-                                  <div className="text-xs text-slate-400">{prod.marca} · {prod.presentacion}</div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-bold text-slate-800">${prod.ofertas?.[0]?.precio_usd?.toFixed(2) || "—"}</div>
-                                  <div className="text-[11px] text-slate-400">{prod.ofertas?.[0]?.precio_ves?.toFixed(2)} Bs</div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="bg-[#fffdf5] border border-[#fef3d5] rounded-2xl p-4 flex justify-between items-center mb-5">
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Estimado</span>
-                            <div className="font-extrabold text-xl text-slate-800">
-                              ${msg.products.reduce((acc: number, p: ChatProduct) => acc + (p.ofertas?.[0]?.precio_usd || 0), 0).toFixed(2)}
-                            </div>
-                          </div>
-
-                          <button className="w-full bg-[#6dbf9c] hover:bg-[#5aa987] text-white py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 transition-colors">
-                            Ver Detalles y Disponibilidad
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                            </svg>
-                          </button>
+                      {/* Tarjetas de productos — una por producto */}
+                      {msg.type === "results" && msg.products && msg.products.length > 0 && (
+                        <div className="space-y-3 mb-3">
+                          {msg.products.map((prod, idx) => (
+                            <ProductCard key={idx} product={prod} isFirst={idx === 0} />
+                          ))}
                         </div>
                       )}
 
+                      {/* Acciones */}
                       {msg.type === "results" && (
-                        <div className="flex flex-wrap gap-2">
-                          <button className="bg-white border border-[#eaeaea] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
-                            Comparar con otras tiendas
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <button
+                            onClick={() => setInputValue("hay otra marca?")}
+                            className="bg-white border border-[#eaeaea] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                          >
+                            Ver otra marca
                           </button>
                           <button className="bg-white border border-[#eaeaea] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
                             Añadir a la lista
@@ -333,6 +403,7 @@ export default function ChatPage() {
               </div>
             ))}
 
+            {/* Typing indicator */}
             {isTyping && (
               <div className="flex gap-4">
                 <div className="w-10 h-10 rounded-full bg-[#8bcab8] flex items-center justify-center text-white flex-shrink-0">

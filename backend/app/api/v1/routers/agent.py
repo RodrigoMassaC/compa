@@ -15,9 +15,11 @@ import json
 
 router = APIRouter()
 
+
 class ChatRequest(BaseModel):
     mensaje: str
-    historial: list[dict] = []
+    historial: list[dict] = []  # [{role: "user"|"assistant", content: "..."}]
+
 
 class ChatResponse(BaseModel):
     respuesta: str
@@ -25,102 +27,190 @@ class ChatResponse(BaseModel):
     tipo: str = "texto"
 
 
-async def buscar_en_db(termino: str, db: AsyncSession) -> list[dict]:
-    query = text("""
-        WITH tasa AS (
-            SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
-        ),
-        precios_recientes AS (
-            SELECT DISTINCT ON (pc.id_producto_maestro, e.id_cadena)
-                pc.id_producto_maestro,
-                e.id_cadena,
-                hp.precio_bruto,
-                hp.moneda_origen
-            FROM historial_precios hp
-            JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
-            JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
-            ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
-        )
-        SELECT
-            pm.nombre_estandar,
-            pm.marca,
-            pm.presentacion,
-            CASE
-                WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
-                WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
-            END as precio_usd,
-            CASE
-                WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
-                WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
-            END as precio_ves,
-            c.nombre_cadena,
-            similarity(pm.nombre_estandar, :termino) as sim
-        FROM productos_maestros pm
-        JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
-        JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
-        WHERE (
-            pm.nombre_estandar % :termino
-            OR pm.terminos_busqueda % :termino
-            OR pm.nombre_estandar ILIKE :search
-        )
-        ORDER BY similarity(pm.nombre_estandar, :termino) DESC, precio_usd ASC NULLS LAST
-        LIMIT 12
-    """)
-    result = await db.execute(query, {"termino": termino, "search": f"%{termino}%"})
-    rows = result.mappings().all()
+# ---------------------------------------------------------------------------
+# Búsqueda en DB — acepta lista de términos para mayor cobertura
+# ---------------------------------------------------------------------------
 
-    productos = {}
-    for row in rows:
-        nombre = row["nombre_estandar"]
-        if nombre not in productos:
-            productos[nombre] = {
-                "nombre": nombre,
-                "marca": row["marca"],
-                "presentacion": row["presentacion"],
-                "ofertas": [],
-                "_sim": float(row["sim"] or 0)
-            }
-        productos[nombre]["ofertas"].append({
-            "tienda": row["nombre_cadena"],
-            "precio_usd": float(row["precio_usd"]) if row["precio_usd"] else None,
-            "precio_ves": float(row["precio_ves"]) if row["precio_ves"] else None,
+async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
+    """
+    Busca productos usando múltiples términos.
+    Usa threshold 0.25 para trigram (más permisivo en español)
+    pero filtra por similitud >= 0.1 para evitar basura.
+    Retorna hasta 8 productos maestros únicos con todas sus ofertas.
+    """
+    todos = {}
+
+    for termino in terminos[:3]:  # Máximo 3 términos para no sobrecargar
+        query = text("""
+            WITH tasa AS (
+                SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
+            ),
+            precios_recientes AS (
+                SELECT DISTINCT ON (pc.id_producto_maestro, e.id_cadena)
+                    pc.id_producto_maestro,
+                    e.id_cadena,
+                    hp.precio_bruto,
+                    hp.moneda_origen
+                FROM historial_precios hp
+                JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
+                JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+                ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+            )
+            SELECT
+                pm.id_producto_maestro,
+                pm.nombre_estandar,
+                pm.marca,
+                pm.presentacion,
+                CASE
+                    WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
+                    WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
+                END as precio_usd,
+                CASE
+                    WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
+                    WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
+                END as precio_ves,
+                c.nombre_cadena,
+                GREATEST(
+                    similarity(pm.nombre_estandar, :termino),
+                    similarity(COALESCE(pm.terminos_busqueda, ''), :termino)
+                ) as sim
+            FROM productos_maestros pm
+            JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
+            JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
+            WHERE (
+                similarity(pm.nombre_estandar, :termino) > 0.30
+                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.30
+            )
+            ORDER BY sim DESC, precio_usd ASC NULLS LAST
+            LIMIT 20
+        """)
+
+        result = await db.execute(query, {
+            "termino": termino,
+            "search": f"%{termino}%"
         })
+        rows = result.mappings().all()
 
-    resultado = sorted(productos.values(), key=lambda x: x["_sim"], reverse=True)
+        for row in rows:
+            pid = str(row["id_producto_maestro"])
+            sim = float(row["sim"] or 0)
+
+            if pid not in todos:
+                todos[pid] = {
+                    "nombre": row["nombre_estandar"],
+                    "marca": row["marca"] or "",
+                    "presentacion": row["presentacion"] or "",
+                    "ofertas": [],
+                    "_sim": sim
+                }
+            else:
+                # Actualiza sim si encontramos mayor similitud con otro término
+                if sim > todos[pid]["_sim"]:
+                    todos[pid]["_sim"] = sim
+
+            # Evitar duplicar la misma tienda para el mismo producto
+            tiendas_existentes = {o["tienda"] for o in todos[pid]["ofertas"]}
+            if row["nombre_cadena"] not in tiendas_existentes:
+                todos[pid]["ofertas"].append({
+                    "tienda": row["nombre_cadena"],
+                    "precio_usd": float(row["precio_usd"]) if row["precio_usd"] else None,
+                    "precio_ves": float(row["precio_ves"]) if row["precio_ves"] else None,
+                })
+
+    # Ordenar ofertas por precio dentro de cada producto
+    for pid in todos:
+        todos[pid]["ofertas"].sort(
+            key=lambda x: x["precio_usd"] if x["precio_usd"] is not None else 9999
+        )
+
+    # Ordenar productos por similitud y tomar los 8 más relevantes
+    resultado = sorted(todos.values(), key=lambda x: (x["ofertas"][0]["precio_usd"] if x["ofertas"] and x["ofertas"][0]["precio_usd"] else 9999))
     for p in resultado:
         del p["_sim"]
-    return resultado[:8]
+
+    return resultado[:5]
 
 
-CLASIFICACION_PROMPT = """Analiza este mensaje de usuario y responde SOLO con un JSON válido, sin texto adicional.
+async def filtrar_relevantes(productos: list[dict], termino_busqueda: str, client) -> list[dict]:
+    """Usa Claude para filtrar productos realmente relevantes al término buscado."""
+    if not productos:
+        return []
 
-Mensaje: "{mensaje}"
+    nombres = [f"{i+1}. {p['nombre']} ({p.get('marca','')}, {p.get('presentacion','')})" 
+               for i, p in enumerate(productos)]
+    lista = "\n".join(nombres)
 
-Si el usuario pregunta por precios o productos, responde:
-{{"accion": "buscar", "termino": "<término específico de búsqueda en español, máximo 3 palabras>"}}
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=100,
+        messages=[{
+            "role": "user",
+            "content": f"""El usuario busca: "{termino_busqueda}"
 
-Si es un saludo o pregunta general, responde:
-{{"accion": "conversar", "respuesta": "<respuesta amigable y breve en español venezolano>"}}
+Productos encontrados:
+{lista}
 
-Ejemplos:
-- "hola" → {{"accion": "conversar", "respuesta": "¡Hola! ¿Qué vas a comprar hoy?"}}
-- "¿cuánto cuesta la leche?" → {{"accion": "buscar", "termino": "leche entera"}}
-- "busca acetaminofen" → {{"accion": "buscar", "termino": "acetaminofen"}}
-- "¿qué tiendas tienen?" → {{"accion": "conversar", "respuesta": "Tenemos precios de Farmago, Central Madeirense, Locatel, Excelsior Gama y Farmatodo."}}"""
+Responde SOLO con los números de los productos que son realmente lo que busca el usuario (no productos que solo contienen el ingrediente de forma secundaria).
+Formato: solo números separados por comas. Ejemplo: 1,3,5
+Si ninguno es relevante responde: ninguno"""
+        }]
+    )
 
-RESPONSE_PROMPT = """Eres Compa, asistente de compras venezolano. El usuario preguntó: "{pregunta}"
+    raw = response.content[0].text.strip()
+    if raw == "ninguno":
+        return []
 
-Encontraste estos productos en la base de datos (ordenados por relevancia):
-{resultados}
+    try:
+        indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
+        return [productos[i] for i in indices if 0 <= i < len(productos)]
+    except:
+        return productos
 
-Instrucciones:
-1. Muestra SOLO los productos que realmente correspondan a lo buscado, ignora los que tengan la palabra como ingrediente secundario
-2. Destaca el precio más bajo y en qué tienda está
-3. Menciona precios en USD y Bs
-4. Sé conciso y amigable en español venezolano
-5. Si hay el mismo producto en varias tiendas, compara los precios
-6. Si no hay productos relevantes, díselo honestamente"""
 
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+CLASIFICACION_SYSTEM = """Eres un clasificador de intenciones para una app venezolana de comparación de precios de supermercados y farmacias.
+
+Tu única función es analizar el mensaje del usuario (considerando el historial) y responder SOLO con un JSON válido, sin texto adicional, sin backticks, sin explicaciones.
+
+Opciones de respuesta:
+
+1. Si el usuario pregunta por precios, productos, marcas, o dónde comprar algo:
+{"accion": "buscar", "terminos": ["término principal", "variante opcional"]}
+
+Los términos deben ser palabras clave en español, máximo 2-3 palabras cada uno.
+Genera variantes útiles. Ejemplos:
+- "leche" → ["leche", "leche entera", "leche en polvo"]
+- "acetaminofen" → ["acetaminofen", "paracetamol", "acetaminofén"]
+- "pañales" → ["pañales", "pañales bebe"]
+- "arroz" → ["arroz", "arroz blanco"]
+
+IMPORTANTE: Si el usuario dice "otra marca", "quiero otra", "hay más?", "muéstrame más" u otras variantes, 
+usa el historial para entender QUÉ producto estaba buscando y genera términos para ESE producto.
+
+2. Si es saludo, agradecimiento o pregunta general sin producto específico:
+{"accion": "conversar", "respuesta": "respuesta breve y amigable"}"""
+
+
+RESPONSE_SYSTEM = """Eres Compa, el asistente oficial de la app venezolana de comparación de precios.
+
+REGLAS ESTRICTAS:
+1. NUNCA sugieras "revisar en otros supermercados" — eso es exactamente lo que la app hace por el usuario
+2. NUNCA digas "los precios pueden variar según ubicación" como consejo genérico
+3. SIEMPRE muestra comparación entre tiendas cuando hay más de una opción
+4. Destaca cuál tienda tiene el precio más bajo
+5. Muestra precios en USD y Bs (bolívares)
+6. Sé directo y útil — máximo 3-4 líneas de texto
+7. Si hay múltiples marcas o presentaciones, menciónalas brevemente
+8. Si NO hay resultados relevantes, di claramente qué buscaste y pide más detalles del producto
+9. Tono: amigable pero profesional, en español venezolano natural (sin "hermano", sin emojis excesivos)"""
+
+
+# ---------------------------------------------------------------------------
+# Endpoint principal
+# ---------------------------------------------------------------------------
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
@@ -129,40 +219,92 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
 
     client = Anthropic(api_key=settings.anthropic_api_key)
 
-    # Paso 1: Clasificar intención con JSON estructurado
+    # --- Construir historial para clasificación (últimos 6 mensajes para contexto) ---
+    historial_reciente = request.historial[-6:] if request.historial else []
+
+    # Formatear historial como texto para incluir en el prompt de clasificación
+    historial_texto = ""
+    if historial_reciente:
+        historial_texto = "\n\nHistorial reciente de la conversación:\n"
+        for msg in historial_reciente:
+            rol = "Usuario" if msg.get("role") == "user" else "Compa"
+            historial_texto += f"{rol}: {msg.get('content', '')}\n"
+
+    # --- Paso 1: Clasificar intención ---
     clasificacion_response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=150,
-        messages=[{"role": "user", "content": CLASIFICACION_PROMPT.format(mensaje=request.mensaje)}]
+        max_tokens=200,
+        system=CLASIFICACION_SYSTEM,
+        messages=[{
+            "role": "user",
+            "content": f"{historial_texto}\nMensaje actual del usuario: {request.mensaje}"
+        }]
     )
 
     raw = clasificacion_response.content[0].text.strip()
-    # Limpiar backticks si los hay
     raw = raw.replace("```json", "").replace("```", "").strip()
 
     try:
         clasificacion = json.loads(raw)
     except json.JSONDecodeError:
-        # Si falla el JSON, respuesta de fallback
-        return ChatResponse(respuesta="¡Hola! Soy Compa, tu asistente de compras. Pregúntame por precios de productos en Venezuela.", tipo="texto")
+        return ChatResponse(
+            respuesta="Hola, soy Compa. Pregúntame por precios de productos en supermercados y farmacias venezolanas.",
+            tipo="texto"
+        )
 
+    # --- Respuesta conversacional ---
     if clasificacion.get("accion") == "conversar":
-        return ChatResponse(respuesta=clasificacion.get("respuesta", "¿En qué te puedo ayudar?"), tipo="texto")
+        return ChatResponse(
+            respuesta=clasificacion.get("respuesta", "¿En qué te puedo ayudar?"),
+            tipo="texto"
+        )
 
+    # --- Búsqueda de productos ---
     if clasificacion.get("accion") == "buscar":
-        termino = clasificacion.get("termino", "")
-        productos_encontrados = await buscar_en_db(termino, db)
+        terminos = clasificacion.get("terminos", [])
 
-        resultados_str = json.dumps(productos_encontrados, ensure_ascii=False, indent=2) if productos_encontrados else "No se encontraron productos."
+        # Fallback: si no hay términos, usar el mensaje directamente
+        if not terminos:
+            terminos = [request.mensaje.strip()[:50]]
+
+        productos_encontrados = await buscar_en_db(terminos, db)
+        productos_encontrados = await filtrar_relevantes(productos_encontrados, terminos[0] if terminos else "", client)
+
+        resultados_str = (
+            json.dumps(productos_encontrados, ensure_ascii=False, indent=2)
+            if productos_encontrados
+            else "No se encontraron productos."
+        )
+
+        # --- Paso 2: Generar respuesta con contexto completo ---
+        # Incluir historial completo para que la respuesta sea coherente
+        mensajes_respuesta = []
+
+        # Agregar historial previo
+        for msg in historial_reciente:
+            mensajes_respuesta.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+
+        # Agregar la pregunta actual con los resultados
+        mensajes_respuesta.append({
+            "role": "user",
+            "content": (
+                f"El usuario preguntó: \"{request.mensaje}\"\n\n"
+                f"Términos buscados: {', '.join(terminos)}\n\n"
+                f"Resultados encontrados en la base de datos:\n{resultados_str}\n\n"
+                f"Responde de forma útil y directa siguiendo las reglas del sistema."
+            )
+        })
 
         respuesta_response = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=600,
-            messages=[{"role": "user", "content": RESPONSE_PROMPT.format(
-                pregunta=request.mensaje,
-                resultados=resultados_str
-            )}]
+            max_tokens=500,
+            system=RESPONSE_SYSTEM,
+            messages=mensajes_respuesta
         )
+
         respuesta = respuesta_response.content[0].text.strip()
 
         return ChatResponse(
