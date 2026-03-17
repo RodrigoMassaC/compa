@@ -12,34 +12,49 @@ async def buscar_productos(
 ):
     """
     Busca productos en el catálogo maestro y devuelve sus precios actuales
-    en las distintas cadenas comerciales, usando la vista_precios_actuales.
+    en las distintas cadenas comerciales, manejando precios en USD y VES.
     """
     try:
         query = text("""
-            SELECT 
+            WITH tasa AS (
+                SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
+            ),
+            precios_recientes AS (
+                SELECT DISTINCT ON (pc.id_producto_maestro, e.id_cadena)
+                    pc.id_producto_maestro,
+                    e.id_cadena,
+                    hp.precio_bruto,
+                    hp.moneda_origen
+                FROM historial_precios hp
+                JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
+                JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+                ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+            )
+            SELECT
                 pm.id_producto_maestro,
                 pm.nombre_estandar,
                 pm.marca,
                 pm.presentacion,
-                MAX(CASE WHEN hp.moneda_origen = 'VES' THEN hp.precio_bruto END) as precio_ves,
-                ROUND(MAX(CASE WHEN hp.moneda_origen = 'VES' THEN hp.precio_bruto END) / 
-                    (SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1), 2
-                ) as precio_usd,
+                CASE
+                    WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
+                    WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
+                END as precio_usd,
+                CASE
+                    WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
+                    WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
+                END as precio_ves,
                 c.nombre_cadena
             FROM productos_maestros pm
-            JOIN productos_crudos pc ON pc.id_producto_maestro = pm.id_producto_maestro
-            JOIN historial_precios hp ON hp.id_producto_crudo = pc.id_producto_crudo
-            JOIN establecimientos e ON pc.id_establecimiento = e.id_establecimiento
-            JOIN cadenas_comerciales c ON e.id_cadena = c.id_cadena
-            WHERE (pm.nombre_estandar ILIKE :search OR pm.marca ILIKE :search)
-            GROUP BY pm.id_producto_maestro, pm.nombre_estandar, pm.marca, pm.presentacion, c.nombre_cadena
+            JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
+            JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
+            WHERE (pm.nombre_estandar ILIKE :search OR pm.marca ILIKE :search OR pm.terminos_busqueda ILIKE :search)
             ORDER BY precio_usd ASC NULLS LAST
             LIMIT 50
         """)
-        
+
         result = await db.execute(query, {"search": f"%{q}%"})
         rows = result.mappings().all()
-        
+
         productos = {}
         for row in rows:
             id_prod = str(row["id_producto_maestro"])
@@ -51,14 +66,14 @@ async def buscar_productos(
                     "presentacion": row["presentacion"],
                     "ofertas": []
                 }
-            
+
             productos[id_prod]["ofertas"].append({
                 "cadena": row["nombre_cadena"],
                 "precio_usd": float(row["precio_usd"]) if row["precio_usd"] is not None else None,
                 "precio_ves": float(row["precio_ves"]) if row["precio_ves"] is not None else None,
             })
-            
+
         return {"resultados": list(productos.values())}
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al buscar productos: {str(e)}")
