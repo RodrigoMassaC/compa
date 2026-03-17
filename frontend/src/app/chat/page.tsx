@@ -108,21 +108,29 @@ export default function ChatPage() {
     setInputValue("");
     setIsTyping(true);
 
+    // Construir historial para el agente
+    const historial = messages.map((m) => ({
+      role: m.role === "agent" ? "assistant" : "user",
+      content: m.content,
+    }));
+
     try {
-      const response = await fetch(
-        `http://localhost:8000/api/v1/catalog/productos/buscar?q=${encodeURIComponent(userMsg.content)}`
-      );
+      const response = await fetch("http://localhost:8000/api/v1/agent/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mensaje: userMsg.content, historial }),
+      });
       const data = await response.json();
       setIsTyping(false);
 
-      if (data && data.resultados && data.resultados.length > 0) {
+      if (data && data.respuesta) {
         setMessages((prev) => [
           ...prev,
           {
             role: "agent",
-            type: "results",
-            content: `He encontrado la mejor opción para tu búsqueda. Aquí está el desglose:`,
-            products: data.resultados,
+            type: data.tipo === "productos" ? "results" : "text",
+            content: data.respuesta,
+            products: data.productos || [],
           },
         ]);
       } else {
@@ -131,7 +139,7 @@ export default function ChatPage() {
           {
             role: "agent",
             type: "text",
-            content: "Lo siento, no encontré productos que coincidan con tu búsqueda en este momento.",
+            content: "Lo siento, no pude procesar tu consulta en este momento.",
           },
         ]);
       }
