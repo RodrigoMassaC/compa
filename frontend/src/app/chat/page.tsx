@@ -111,11 +111,37 @@ interface ChatProduct {
   ofertas?: Oferta[];
 }
 
+interface CarritoItem {
+  buscado: string;
+  nombre: string | null;
+  marca?: string;
+  presentacion?: string;
+  precio_usd?: number;
+  precio_ves?: number;
+  disponible: boolean;
+}
+
+interface CarritoTienda {
+  tienda: string;
+  total_usd: number;
+  total_ves: number;
+  items_encontrados: number;
+  items: CarritoItem[];
+}
+
+interface CarritoResult {
+  items_buscados: string[];
+  tiendas: CarritoTienda[];
+  ahorro_maximo_usd: number | null;
+  total_items: number;
+}
+
 interface ChatMessage {
   role: "user" | "agent";
-  type?: "text" | "results";
+  type?: "text" | "results" | "carrito";
   content: string;
   products?: ChatProduct[];
+  carrito?: CarritoResult;
 }
 
 // ── Componente tarjeta de producto ─────────────────────────────────────────
@@ -186,16 +212,115 @@ function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: bool
   );
 }
 
+// ── Componente tarjeta de tienda (Carrito Óptimo) ──────────────────────────
+function CartOptimalCard({
+  tienda,
+  isFirst,
+  totalItems,
+  ahorroMaximo,
+}: {
+  tienda: CarritoTienda;
+  isFirst: boolean;
+  totalItems: number;
+  ahorroMaximo: number | null;
+}) {
+  const incompleto = tienda.items_encontrados < totalItems;
+
+  return (
+    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst && !incompleto ? "border-[#6abf9a]" : "border-[#f0f0f0]"}`}>
+      {/* Header */}
+      <div className="flex justify-between items-start mb-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            {isFirst && !incompleto && (
+              <span className="bg-[#e8f8f1] text-[#34a87a] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                Mejor precio
+              </span>
+            )}
+            {incompleto && (
+              <span className="bg-[#fff8e1] text-[#e6a817] text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                Lista incompleta
+              </span>
+            )}
+          </div>
+          <div className="font-bold text-slate-800 text-[15px] mt-1">{tienda.tienda}</div>
+          <div className="text-xs text-slate-400 mt-0.5">
+            {tienda.items_encontrados}/{totalItems} productos disponibles
+          </div>
+        </div>
+        <div className="text-right ml-4">
+          <div className="font-extrabold text-slate-800 text-lg">
+            ${tienda.total_usd.toFixed(2)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {tienda.total_ves.toLocaleString("es-VE", { minimumFractionDigits: 2 })} Bs
+          </div>
+          {isFirst && !incompleto && ahorroMaximo && ahorroMaximo > 0 && (
+            <div className="text-[10px] text-[#34a87a] font-bold mt-0.5">
+              Ahorra ${ahorroMaximo.toFixed(2)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Desglose de items */}
+      <div className="border-t border-slate-50 pt-3 space-y-2">
+        {tienda.items.map((item, idx) => (
+          <div key={idx} className="flex justify-between items-start gap-2">
+            <div className="flex items-start gap-2 flex-1 min-w-0">
+              <span className={`text-xs mt-0.5 font-bold flex-shrink-0 ${item.disponible ? "text-[#34a87a]" : "text-slate-300"}`}>
+                {item.disponible ? "✓" : "✗"}
+              </span>
+              <div className="min-w-0">
+                <div className={`text-xs font-bold capitalize ${item.disponible ? "text-slate-700" : "text-slate-400"}`}>
+                  {item.buscado}
+                </div>
+                {item.disponible && item.nombre && (
+                  <div className="text-[10px] text-slate-400 truncate">{item.nombre}</div>
+                )}
+                {!item.disponible && (
+                  <div className="text-[10px] text-slate-400">No disponible</div>
+                )}
+              </div>
+            </div>
+            {item.disponible && item.precio_usd !== undefined && (
+              <div className="text-right flex-shrink-0">
+                <span className="text-xs font-bold text-slate-700">${item.precio_usd.toFixed(2)}</span>
+                {item.precio_ves !== undefined && (
+                  <div className="text-[10px] text-slate-400">
+                    {item.precio_ves.toLocaleString("es-VE", { minimumFractionDigits: 0 })} Bs
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Página principal ───────────────────────────────────────────────────────
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [tasaBCV, setTasaBCV] = useState<string>("...");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  useEffect(() => {
+    fetch("http://localhost:8000/api/v1/tasa")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.tasa_usd) setTasaBCV(Number(d.tasa_usd).toLocaleString("es-VE", { minimumFractionDigits: 2 }));
+      })
+      .catch(() => setTasaBCV("N/D"));
+  }, []);
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
@@ -223,9 +348,10 @@ export default function ChatPage() {
           ...prev,
           {
             role: "agent",
-            type: data.tipo === "productos" ? "results" : "text",
+            type: data.tipo === "productos" ? "results" : data.tipo === "carrito" ? "carrito" : "text",
             content: data.respuesta,
             products: data.productos || [],
+            carrito: data.carrito || undefined,
           },
         ]);
       } else {
@@ -319,14 +445,14 @@ export default function ChatPage() {
       {/* ÁREA PRINCIPAL */}
       <main className="flex-1 flex flex-col relative h-full overflow-hidden">
         {/* Header */}
-        <header className="absolute top-0 w-full p-4 flex justify-between z-10 pointer-events-none">
+        <header className="absolute top-0 w-full p-4 flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff]/80 to-transparent">
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
             <PinIcon className="w-4 h-4 text-[#6abf9a]" />
             Maracay, Aragua
           </div>
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
             <RefreshIcon className="w-4 h-4 text-slate-400" />
-            Tasa BCV: 36.50 Bs/USD
+            Tasa BCV: {tasaBCV} Bs/$
           </div>
         </header>
 
@@ -343,7 +469,7 @@ export default function ChatPage() {
                 <p className="font-medium text-lg">¿Qué vamos a comprar hoy?</p>
                 <p className="text-sm mt-2">Pregúntame sobre precios en supermercados y farmacias.</p>
                 <div className="flex flex-wrap gap-2 mt-6 justify-center">
-                  {["¿Dónde consigo leche más barata?", "Precio del arroz", "Medicamentos para la gripe"].map((s) => (
+                  {["¿Dónde consigo leche más barata?", "Precio del arroz", "Carrito: leche, arroz, aceite, jabón", "Medicamentos para la gripe"].map((s) => (
                     <button
                       key={s}
                       onClick={() => setInputValue(s)}
@@ -379,6 +505,21 @@ export default function ChatPage() {
                         <div className="space-y-3 mb-3">
                           {msg.products.map((prod, idx) => (
                             <ProductCard key={idx} product={prod} isFirst={idx === 0} />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Tarjetas de carrito óptimo */}
+                      {msg.type === "carrito" && msg.carrito && msg.carrito.tiendas.length > 0 && (
+                        <div className="space-y-3 mb-3">
+                          {msg.carrito.tiendas.map((t, idx) => (
+                            <CartOptimalCard
+                              key={idx}
+                              tienda={t}
+                              isFirst={idx === 0}
+                              totalItems={msg.carrito!.total_items}
+                              ahorroMaximo={msg.carrito!.ahorro_maximo_usd}
+                            />
                           ))}
                         </div>
                       )}
