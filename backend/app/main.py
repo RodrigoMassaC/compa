@@ -2,6 +2,7 @@
 Punto de entrada de la API Compa.
 Define la app FastAPI, middleware, routers y el endpoint /health.
 """
+import logging
 import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,18 +10,25 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import check_db_connection
+from app.core.exceptions import add_exception_handlers
 from app.api.v1.router import api_router
+
+# ── Logging básico ───────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s | %(levelname)-8s | %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("compa")
 
 
 # ── Ciclo de vida de la aplicación ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Acciones al iniciar y al apagar la aplicación."""
-    # Inicialización: el motor de DB es lazy, no hay nada que hacer aquí
-    print("🚀 Compa API arrancando...")
+    logger.info("Compa API arrancando — env=%s", settings.env)
     yield
-    # Cierre: liberar recursos si fuera necesario
-    print("🛑 Compa API apagando...")
+    logger.info("Compa API apagando...")
 
 
 # ── Instancia principal ──
@@ -33,6 +41,9 @@ app = FastAPI(
 
 # ── Montar Routers ──
 app.include_router(api_router, prefix="/api/v1")
+
+# ── Exception handlers ──
+add_exception_handlers(app)
 
 # ── CORS (permitir cualquier origen en desarrollo) ──
 app.add_middleware(

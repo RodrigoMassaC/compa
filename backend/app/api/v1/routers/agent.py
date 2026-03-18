@@ -4,6 +4,7 @@ Agente IA de Compa (compatible con anthropic>=0.26)
 POST /api/v1/agent/chat
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,10 @@ from sqlalchemy import text
 from anthropic import Anthropic
 from app.core.database import get_db
 from app.core.config import settings
+from app.services.event_logger import log_consulta
 import json
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -456,6 +460,12 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     raw = clasificacion_response.content[0].text.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
 
+    # Tokens consumidos hasta ahora (clasificación)
+    tokens_total = (
+        clasificacion_response.usage.input_tokens
+        + clasificacion_response.usage.output_tokens
+    )
+
     try:
         clasificacion = json.loads(raw)
     except json.JSONDecodeError:
@@ -464,15 +474,19 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             tipo="texto"
         )
 
+    accion = clasificacion.get("accion", "conversar")
+    logger.info("chat | accion=%s | msg=%.60s", accion, request.mensaje)
+
     # --- Respuesta conversacional ---
-    if clasificacion.get("accion") == "conversar":
+    if accion == "conversar":
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
         return ChatResponse(
             respuesta=clasificacion.get("respuesta", "¿En qué te puedo ayudar?"),
             tipo="texto"
         )
 
     # --- Búsqueda de productos ---
-    if clasificacion.get("accion") == "buscar":
+    if accion == "buscar":
         terminos = clasificacion.get("terminos", [])
 
         # Fallback: si no hay términos, usar el mensaje directamente
@@ -480,7 +494,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             terminos = [request.mensaje.strip()[:50]]
 
         productos_encontrados = await buscar_en_db(terminos, db)
-        productos_encontrados = await filtrar_relevantes(productos_encontrados, terminos[0] if terminos else "", client)
+        productos_encontrados = await filtrar_relevantes(
+            productos_encontrados, terminos[0] if terminos else "", client
+        )
 
         resultados_str = (
             json.dumps(productos_encontrados, ensure_ascii=False, indent=2)
@@ -488,18 +504,13 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             else "No se encontraron productos."
         )
 
-        # --- Paso 2: Generar respuesta con contexto completo ---
         # Incluir historial completo para que la respuesta sea coherente
         mensajes_respuesta = []
-
-        # Agregar historial previo
         for msg in historial_reciente:
             mensajes_respuesta.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
-
-        # Agregar la pregunta actual con los resultados
         mensajes_respuesta.append({
             "role": "user",
             "content": (
@@ -517,18 +528,23 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             messages=mensajes_respuesta
         )
 
-        respuesta = respuesta_response.content[0].text.strip()
+        tokens_total += (
+            respuesta_response.usage.input_tokens
+            + respuesta_response.usage.output_tokens
+        )
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
 
         return ChatResponse(
-            respuesta=respuesta,
+            respuesta=respuesta_response.content[0].text.strip(),
             productos=productos_encontrados,
             tipo="productos" if productos_encontrados else "texto"
         )
 
     # --- Lista de compras / Carrito Óptimo ---
-    if clasificacion.get("accion") == "lista":
+    if accion == "lista":
         items = clasificacion.get("items", [])
         if len(items) < 2:
+            await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
             return ChatResponse(
                 respuesta="Dime al menos 2 productos para calcular dónde te sale más barata la compra total.",
                 tipo="texto"
@@ -536,7 +552,6 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
 
         carrito = await calcular_carrito_optimo(items, db, client)
 
-        # Construir resumen para que Claude genere el texto
         resumen = f"Lista del usuario: {', '.join(items)}\n\n"
         for t in carrito["tiendas"]:
             resumen += f"- {t['tienda']}: ${t['total_usd']:.2f} ({t['items_encontrados']}/{carrito['total_items']} productos)\n"
@@ -549,6 +564,12 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             system=CART_SYSTEM,
             messages=[{"role": "user", "content": resumen}]
         )
+
+        tokens_total += (
+            respuesta_response.usage.input_tokens
+            + respuesta_response.usage.output_tokens
+        )
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
 
         return ChatResponse(
             respuesta=respuesta_response.content[0].text.strip(),
