@@ -175,6 +175,12 @@ CREATE TABLE IF NOT EXISTS usuarios (
     password_hash         VARCHAR(255),
     nombre_completo       VARCHAR(150),
     nombre_empresa        VARCHAR(150),
+    -- Perfil del consumidor
+    fecha_nacimiento      DATE,
+    sexo                  VARCHAR(10) CHECK (sexo IN ('M','F','OTRO')),
+    ciudad                VARCHAR(100),
+    estado_ven            VARCHAR(100),
+    -- Suscripción
     id_plan_actual        UUID REFERENCES planes_membresia(id_plan) ON DELETE RESTRICT,
     estado_suscripcion    VARCHAR(20) DEFAULT 'ACTIVA'
                           CHECK (estado_suscripcion IN ('ACTIVA','VENCIDA','CANCELADA','PRUEBA')),
