@@ -321,7 +321,7 @@ export default function ChatPage() {
   }, [messages, isTyping]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/v1/tasa")
+    fetch("http://localhost:8000/api/v1/catalog/tasa")
       .then((r) => r.json())
       .then((d) => {
         if (d?.tasa_usd) setTasaBCV(Number(d.tasa_usd).toLocaleString("es-VE", { minimumFractionDigits: 2 }));
