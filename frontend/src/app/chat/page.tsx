@@ -3,6 +3,42 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { getUser, getToken, clearAuth, planLabel, type AuthUser } from "@/lib/auth";
 
+// ── Historial en localStorage ──────────────────────────────────────────────
+const HISTORY_KEY = "compa_historial";
+
+interface Conversacion {
+  id: string;
+  titulo: string;
+  fecha: string; // ISO
+  messages: ChatMessage[];
+}
+
+function cargarHistorial(): Conversacion[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function guardarHistorial(lista: Conversacion[]): void {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(lista.slice(0, 30)));
+}
+
+function agruparPorFecha(lista: Conversacion[]): { hoy: Conversacion[]; ayer: Conversacion[]; anterior: Conversacion[] } {
+  const ahora = new Date();
+  const hoy = ahora.toDateString();
+  const ayer = new Date(ahora.setDate(ahora.getDate() - 1)).toDateString();
+  return {
+    hoy:      lista.filter(c => new Date(c.fecha).toDateString() === hoy),
+    ayer:     lista.filter(c => new Date(c.fecha).toDateString() === ayer),
+    anterior: lista.filter(c => {
+      const d = new Date(c.fecha).toDateString();
+      return d !== hoy && d !== ayer;
+    }),
+  };
+}
+
 // ── Icons ──────────────────────────────────────────────────────────────────
 const PiggyBankIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -309,11 +345,14 @@ export default function ChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [tasaBCV, setTasaBCV] = useState<string>("...");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [historial, setHistorial] = useState<Conversacion[]>([]);
+  const [convId, setConvId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Cargar usuario desde localStorage al montar
+  // Cargar usuario e historial desde localStorage al montar
   useEffect(() => {
     setCurrentUser(getUser());
+    setHistorial(cargarHistorial());
   }, []);
 
   useEffect(() => {
@@ -332,6 +371,23 @@ export default function ChatPage() {
   const handleSend = async () => {
     if (!inputValue.trim()) return;
     const userMsg: ChatMessage = { role: "user", content: inputValue };
+    const esNuevaConv = messages.length === 0;
+    const nuevoConvId = esNuevaConv ? crypto.randomUUID() : convId;
+
+    // Si es la primera pregunta de la conversación → crear entrada en historial
+    if (esNuevaConv && nuevoConvId) {
+      const nueva: Conversacion = {
+        id: nuevoConvId,
+        titulo: inputValue.slice(0, 40),
+        fecha: new Date().toISOString(),
+        messages: [userMsg],
+      };
+      const actualizado = [nueva, ...historial];
+      setHistorial(actualizado);
+      guardarHistorial(actualizado);
+      setConvId(nuevoConvId);
+    }
+
     setMessages((prev) => [...prev, userMsg]);
     setInputValue("");
     setIsTyping(true);
@@ -401,32 +457,47 @@ export default function ChatPage() {
 
           <button
             className="w-full mt-8 bg-[#6abf9a] hover:bg-[#5aa987] text-white font-bold py-3 px-4 rounded-full flex items-center justify-center gap-2 transition-colors"
-            onClick={() => setMessages([])}
+            onClick={() => { setMessages([]); setConvId(null); }}
           >
             <span className="text-xl leading-none">+</span> Nueva consulta
           </button>
 
-          <div className="mt-8">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Hoy</h3>
-            <ul className="space-y-1">
-              <li>
-                <button className="w-full flex items-center gap-3 px-3 py-2 bg-[#f0f9f5] border border-[#e0f3eb] text-slate-700 rounded-xl text-sm font-medium">
-                  <ChatIcon className="w-4 h-4 text-[#6abf9a]" />
-                  Precios de Harina y Arroz
-                </button>
-              </li>
-            </ul>
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-6 mb-3">Ayer</h3>
-            <ul className="space-y-1">
-              {["Medicinas de la abuela", "Artículos para fiestas", "Compras semanales"].map((item) => (
-                <li key={item}>
-                  <button className="w-full flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-50 rounded-xl text-sm font-medium transition-colors">
-                    <ClockIcon className="w-4 h-4 text-slate-300" />
-                    {item}
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <div className="mt-8 overflow-y-auto max-h-[340px]">
+            {(() => {
+              const { hoy, ayer, anterior } = agruparPorFecha(historial);
+              const GrupoHistorial = ({ titulo, items }: { titulo: string; items: Conversacion[] }) =>
+                items.length === 0 ? null : (
+                  <>
+                    <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 mt-5 first:mt-0">{titulo}</h3>
+                    <ul className="space-y-1">
+                      {items.map((conv) => (
+                        <li key={conv.id}>
+                          <button
+                            onClick={() => { setMessages(conv.messages); setConvId(conv.id); }}
+                            className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors text-left truncate ${
+                              conv.id === convId
+                                ? "bg-[#f0f9f5] border border-[#e0f3eb] text-slate-700"
+                                : "text-slate-500 hover:bg-slate-50"
+                            }`}
+                          >
+                            <ChatIcon className={`w-4 h-4 flex-shrink-0 ${conv.id === convId ? "text-[#6abf9a]" : "text-slate-300"}`} />
+                            <span className="truncate">{conv.titulo}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                );
+              return historial.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center mt-8">Tus consultas aparecerán aquí</p>
+              ) : (
+                <>
+                  <GrupoHistorial titulo="Hoy" items={hoy} />
+                  <GrupoHistorial titulo="Ayer" items={ayer} />
+                  <GrupoHistorial titulo="Anterior" items={anterior} />
+                </>
+              );
+            })()}
           </div>
         </div>
 

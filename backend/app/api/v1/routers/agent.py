@@ -5,6 +5,7 @@ POST /api/v1/agent/chat
 """
 
 import logging
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from anthropic import Anthropic
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.event_logger import log_consulta
+from app.api.dependencies import get_optional_user, check_rate_limit
 import json
 
 logger = logging.getLogger(__name__)
@@ -429,7 +431,12 @@ REGLAS:
 # ---------------------------------------------------------------------------
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def chat(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[dict] = Depends(get_optional_user),
+    _: None = Depends(check_rate_limit),
+):
     if not request.mensaje.strip():
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
 
@@ -479,7 +486,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
 
     # --- Respuesta conversacional ---
     if accion == "conversar":
-        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total, id_usuario=current_user["id_usuario"] if current_user else None)
         return ChatResponse(
             respuesta=clasificacion.get("respuesta", "¿En qué te puedo ayudar?"),
             tipo="texto"
@@ -532,7 +539,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             respuesta_response.usage.input_tokens
             + respuesta_response.usage.output_tokens
         )
-        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total, id_usuario=current_user["id_usuario"] if current_user else None)
 
         return ChatResponse(
             respuesta=respuesta_response.content[0].text.strip(),
@@ -544,7 +551,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     if accion == "lista":
         items = clasificacion.get("items", [])
         if len(items) < 2:
-            await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
+            await log_consulta(db, request.mensaje, accion, tokens=tokens_total, id_usuario=current_user["id_usuario"] if current_user else None)
             return ChatResponse(
                 respuesta="Dime al menos 2 productos para calcular dónde te sale más barata la compra total.",
                 tipo="texto"
@@ -569,7 +576,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             respuesta_response.usage.input_tokens
             + respuesta_response.usage.output_tokens
         )
-        await log_consulta(db, request.mensaje, accion, tokens=tokens_total)
+        await log_consulta(db, request.mensaje, accion, tokens=tokens_total, id_usuario=current_user["id_usuario"] if current_user else None)
 
         return ChatResponse(
             respuesta=respuesta_response.content[0].text.strip(),
