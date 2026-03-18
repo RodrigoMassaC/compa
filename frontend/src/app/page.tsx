@@ -11,9 +11,14 @@ export default function LandingPage() {
             <Link href="#empresas" className="hover:text-sky-500">Para Empresas</Link>
             <Link href="#precios" className="hover:text-sky-500">Precios B2B</Link>
           </nav>
-          <Link href="/chat" className="bg-sky-100 text-sky-600 hover:bg-sky-200 px-6 py-2.5 rounded-full text-sm font-bold">
-            Probar el Chat Gratis
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link href="/auth" className="text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors">
+              Iniciar sesión
+            </Link>
+            <Link href="/auth?mode=register" className="bg-sky-100 text-sky-600 hover:bg-sky-200 px-6 py-2.5 rounded-full text-sm font-bold transition-colors">
+              Registrarse gratis
+            </Link>
+          </div>
         </div>
       </header>
       <main>

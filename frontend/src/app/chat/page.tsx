@@ -1,6 +1,7 @@
 "use client";
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
+import { getUser, getToken, clearAuth, planLabel, type AuthUser } from "@/lib/auth";
 
 // ── Icons ──────────────────────────────────────────────────────────────────
 const PiggyBankIcon = ({ className }: { className?: string }) => (
@@ -307,7 +308,13 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [tasaBCV, setTasaBCV] = useState<string>("...");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Cargar usuario desde localStorage al montar
+  useEffect(() => {
+    setCurrentUser(getUser());
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -335,9 +342,13 @@ export default function ChatPage() {
     }));
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const token = getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const response = await fetch("http://localhost:8000/api/v1/agent/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ mensaje: userMsg.content, historial }),
       });
       const data = await response.json();
@@ -426,18 +437,37 @@ export default function ChatPage() {
                 <UserIcon className="w-6 h-6" />
               </div>
               <div>
-                <div className="font-bold text-sm text-slate-800">Usuario Feliz</div>
-                <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                  <span className="w-1.5 h-1.5 bg-[#6abf9a] rounded-full"></span> Plan Gratis
+                <div className="font-bold text-sm text-slate-800">
+                  {currentUser?.nombre_completo ?? "Invitado"}
                 </div>
-                <a href="#pro" className="text-xs font-bold text-[#6abf9a] inline-block mt-0.5">
-                  Mejorar a Pro ✨
-                </a>
+                <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                  <span className="w-1.5 h-1.5 bg-[#6abf9a] rounded-full"></span>
+                  {currentUser ? planLabel(currentUser.plan) : "Sin cuenta"}
+                </div>
+                {currentUser ? (
+                  <a href="#pro" className="text-xs font-bold text-[#6abf9a] inline-block mt-0.5">
+                    Mejorar a Pro ✨
+                  </a>
+                ) : (
+                  <Link href="/auth" className="text-xs font-bold text-[#6abf9a] inline-block mt-0.5">
+                    Iniciar sesión →
+                  </Link>
+                )}
               </div>
             </div>
-            <button className="text-slate-400 hover:text-slate-600">
-              <SettingsIcon className="w-5 h-5" />
-            </button>
+            {currentUser ? (
+              <button
+                onClick={() => { clearAuth(); setCurrentUser(null); }}
+                title="Cerrar sesión"
+                className="text-slate-400 hover:text-red-400 transition-colors"
+              >
+                <SettingsIcon className="w-5 h-5" />
+              </button>
+            ) : (
+              <Link href="/auth?mode=register">
+                <SettingsIcon className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+              </Link>
+            )}
           </div>
         </div>
       </aside>
@@ -445,7 +475,7 @@ export default function ChatPage() {
       {/* ÁREA PRINCIPAL */}
       <main className="flex-1 flex flex-col relative h-full overflow-hidden">
         {/* Header */}
-        <header className="absolute top-0 w-full p-4 flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff]/80 to-transparent">
+        <header className="absolute top-0 w-full pt-4 px-4 pb-10 flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff] to-transparent">
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
             <PinIcon className="w-4 h-4 text-[#6abf9a]" />
             Maracay, Aragua
@@ -457,7 +487,7 @@ export default function ChatPage() {
         </header>
 
         {/* Mensajes */}
-        <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-20 flex flex-col items-center">
+        <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-24 flex flex-col items-center">
           <div className="w-full max-w-3xl flex flex-col gap-6">
 
             {/* Estado vacío */}
