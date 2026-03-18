@@ -1,30 +1,30 @@
 """
 Utilidades de seguridad para Compa.
-- Hashing de contraseñas con bcrypt (passlib)
+- Hashing de contraseñas con bcrypt directo (compatible con bcrypt >= 4.x)
 - Creación y verificación de tokens JWT (python-jose)
 """
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
-
-# ── Contexto de hashing ──────────────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # ── Contraseñas ──────────────────────────────────────────────────────────────
 
 def get_password_hash(password: str) -> str:
     """Retorna el hash bcrypt de una contraseña en texto plano."""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Compara una contraseña en texto plano con su hash almacenado."""
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
 
 
 # ── JWT ───────────────────────────────────────────────────────────────────────

@@ -90,9 +90,9 @@ async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
                 telefono_wa, fecha_nacimiento, sexo, ciudad, estado_ven,
                 rol_usuario, id_plan_actual, estado_suscripcion
             ) VALUES (
-                :id::uuid, :email, :password_hash, :nombre,
+                CAST(:id AS uuid), :email, :password_hash, :nombre,
                 :telefono_wa, :fecha_nacimiento, :sexo, :ciudad, :estado_ven,
-                'CONSUMIDOR', :plan_id::uuid, 'ACTIVA'
+                'CONSUMIDOR', CAST(:plan_id AS uuid), 'ACTIVA'
             )
         """),
         {
@@ -166,7 +166,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
 
     # Actualizar ultimo_login
     await db.execute(
-        text("UPDATE usuarios SET ultimo_login = NOW() WHERE id_usuario = :id::uuid"),
+        text("UPDATE usuarios SET ultimo_login = NOW() WHERE id_usuario = CAST(:id AS uuid)"),
         {"id": row["id_usuario"]},
     )
     await db.commit()
