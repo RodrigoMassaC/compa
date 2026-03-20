@@ -85,8 +85,8 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
             JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
             WHERE (
-                similarity(pm.nombre_estandar, :termino) > 0.30
-                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.30
+                similarity(pm.nombre_estandar, :termino) > 0.35
+                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.35
             )
             ORDER BY sim DESC, precio_usd ASC NULLS LAST
             LIMIT 20
@@ -175,8 +175,8 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
         JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
         WHERE (
-            similarity(pm.nombre_estandar, :termino) > 0.30
-            OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.30
+            similarity(pm.nombre_estandar, :termino) > 0.35
+            OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.35
         )
         ORDER BY c.id_cadena, precio_usd ASC NULLS LAST
     """)
@@ -333,13 +333,49 @@ async def calcular_carrito_optimo(items: list[str], db: AsyncSession, client) ->
     }
 
 
-async def filtrar_relevantes(productos: list[dict], termino_busqueda: str, client) -> list[dict]:
-    """Usa Claude para filtrar productos realmente relevantes al término buscado."""
+def _prefiltro_substring(productos: list[dict], terminos: list[str]) -> list[dict]:
+    """
+    Capa 0 (sin costo LLM): descarta productos donde NINGUNA palabra
+    significativa de los términos aparece en nombre+marca del producto.
+    Palabras de ≥4 letras para evitar falsos positivos con preposiciones.
+    """
+    palabras_clave = set()
+    for t in terminos:
+        for p in t.lower().split():
+            if len(p) >= 4:
+                palabras_clave.add(p)
+
+    if not palabras_clave:
+        return productos
+
+    resultado = []
+    for prod in productos:
+        texto = f"{prod.get('nombre','').lower()} {prod.get('marca','').lower()}"
+        if any(pal in texto for pal in palabras_clave):
+            resultado.append(prod)
+
+    # Si el pre-filtro elimina TODO, devolver originales (fail-safe)
+    return resultado if resultado else productos
+
+
+async def filtrar_relevantes(
+    productos: list[dict],
+    terminos: list[str],
+    mensaje_original: str,
+    client,
+) -> list[dict]:
+    """
+    Capa 2 (Claude Haiku): valida semánticamente los productos restantes.
+    Recibe todos los términos buscados + el mensaje original como contexto.
+    """
     if not productos:
         return []
 
-    nombres = [f"{i+1}. {p['nombre']} ({p.get('marca','')}, {p.get('presentacion','')})" 
-               for i, p in enumerate(productos)]
+    termino_principal = terminos[0] if terminos else ""
+    nombres = [
+        f"{i+1}. {p['nombre']} ({p.get('marca','')}, {p.get('presentacion','')})"
+        for i, p in enumerate(productos)
+    ]
     lista = "\n".join(nombres)
 
     response = client.messages.create(
@@ -347,25 +383,32 @@ async def filtrar_relevantes(productos: list[dict], termino_busqueda: str, clien
         max_tokens=100,
         messages=[{
             "role": "user",
-            "content": f"""El usuario busca: "{termino_busqueda}"
+            "content": f"""Contexto: app venezolana de comparación de precios en supermercados.
+El usuario escribió: "{mensaje_original}"
+Término principal buscado: "{termino_principal}"
+Términos alternativos considerados: {", ".join(terminos[1:]) if len(terminos) > 1 else "ninguno"}
 
-Productos encontrados:
+Productos encontrados en la base de datos:
 {lista}
 
-Responde SOLO con los números de los productos que son realmente lo que busca el usuario (no productos que solo contienen el ingrediente de forma secundaria).
-Formato: solo números separados por comas. Ejemplo: 1,3,5
-Si ninguno es relevante responde: ninguno"""
+Tarea: indica los números de los productos que SÍ son lo que el usuario busca.
+Regla clave: excluye productos donde el término buscado es solo un ingrediente secundario o parte del nombre de algo completamente distinto.
+Formato: números separados por comas. Ejemplo: 1,3
+Si ninguno es relevante: ninguno"""
         }]
     )
 
     raw = response.content[0].text.strip()
-    if raw == "ninguno":
+    logger.debug("filtrar_relevantes | termino=%s | raw=%s", termino_principal, raw)
+
+    if raw.lower() == "ninguno":
         return []
 
     try:
         indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
-        return [productos[i] for i in indices if 0 <= i < len(productos)]
-    except:
+        filtrados = [productos[i] for i in indices if 0 <= i < len(productos)]
+        return filtrados if filtrados else productos  # fail-safe
+    except Exception:
         return productos
 
 
@@ -501,8 +544,11 @@ async def chat(
             terminos = [request.mensaje.strip()[:50]]
 
         productos_encontrados = await buscar_en_db(terminos, db)
+        # Capa 1: pre-filtro gratuito por substring
+        productos_encontrados = _prefiltro_substring(productos_encontrados, terminos)
+        # Capa 2: validación semántica con Claude
         productos_encontrados = await filtrar_relevantes(
-            productos_encontrados, terminos[0] if terminos else "", client
+            productos_encontrados, terminos, request.mensaje, client
         )
 
         resultados_str = (
