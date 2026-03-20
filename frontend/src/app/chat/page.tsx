@@ -185,11 +185,13 @@ interface ChatMessage {
 
 // ── Componente tarjeta de producto ─────────────────────────────────────────
 function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: boolean }) {
+  const [verTiendas, setVerTiendas] = React.useState(false);
   const ofertas = product.ofertas || [];
   const precioMin = ofertas.reduce((min, o) =>
     (o.precio_usd ?? 9999) < (min.precio_usd ?? 9999) ? o : min,
     ofertas[0] || {}
   );
+  const otrasTiendas = ofertas.filter((o) => o.tienda !== precioMin.tienda);
 
   return (
     <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst ? "border-[#6abf9a]" : "border-[#f0f0f0]"}`}>
@@ -221,30 +223,40 @@ function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: bool
         </div>
       </div>
 
-      {/* Comparación de tiendas si hay más de una */}
-      {ofertas.length > 1 && (
-        <div className="border-t border-slate-50 pt-3 mt-2">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-            Comparar precios ({ofertas.length} tiendas)
-          </div>
-          <div className="space-y-1.5">
-            {ofertas.map((oferta, idx) => (
-              <div key={idx} className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <TagIcon className="w-3 h-3 text-slate-300" />
-                  <span className="text-xs text-slate-600 font-medium">{oferta.tienda}</span>
+      {/* Botón para ver otras tiendas */}
+      {otrasTiendas.length > 0 && (
+        <div className="border-t border-slate-50 pt-2 mt-1">
+          <button
+            onClick={() => setVerTiendas((v) => !v)}
+            className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-slate-600 transition-colors w-full"
+          >
+            <TagIcon className="w-3 h-3" />
+            {verTiendas
+              ? "Ocultar otras tiendas"
+              : `Ver en otras ${otrasTiendas.length} ${otrasTiendas.length === 1 ? "tienda" : "tiendas"}`}
+            <span className="ml-auto">{verTiendas ? "▲" : "▼"}</span>
+          </button>
+
+          {verTiendas && (
+            <div className="mt-2 space-y-1.5">
+              {otrasTiendas.map((oferta, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <TagIcon className="w-3 h-3 text-slate-300" />
+                    <span className="text-xs text-slate-600 font-medium">{oferta.tienda}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-slate-600">
+                      ${oferta.precio_usd?.toFixed(2) ?? "—"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 ml-1">
+                      ({oferta.precio_ves?.toLocaleString("es-VE", { minimumFractionDigits: 0 }) ?? "—"} Bs)
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className={`text-xs font-bold ${idx === 0 ? "text-[#34a87a]" : "text-slate-600"}`}>
-                    ${oferta.precio_usd?.toFixed(2) ?? "—"}
-                  </span>
-                  <span className="text-[10px] text-slate-400 ml-1">
-                    ({oferta.precio_ves?.toLocaleString("es-VE", { minimumFractionDigits: 0 }) ?? "—"} Bs)
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
