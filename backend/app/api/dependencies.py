@@ -137,7 +137,7 @@ async def get_current_user(
                 COALESCE(pm.codigo_plan, 'FREE') AS plan
             FROM usuarios u
             LEFT JOIN planes_membresia pm ON pm.id_plan = u.id_plan_actual
-            WHERE u.id_usuario = :id::uuid
+            WHERE u.id_usuario = CAST(:id AS uuid)
         """),
         {"id": id_usuario},
     )
