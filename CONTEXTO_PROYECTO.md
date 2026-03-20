@@ -10,22 +10,22 @@ Compa compara precios de productos básicos (alimentos y medicamentos) en Venezu
 ### Modelo de negocio dual:
 
 **B2C — Consumidores:**
-- Encuentran el **"Carrito Óptimo"**: dónde comprar su lista completa al menor costo posible (máximo 2 establecimientos)
+- Encuentran el **"Carrito Óptimo"**: dónde comprar su lista completa al menor costo posible
 - Comparan precios de productos individuales entre tiendas
 - Reciben recomendaciones personalizadas vía chat con agente IA
 - **Plan Gratis:** acceso básico al agente y comparación
-- **Plan Pro ✨:** funcionalidades avanzadas (listas guardadas, alertas de precio, historial, analytics personales)
+- **Plan Pro ✨:** funcionalidades avanzadas (listas guardadas, alertas de precio, historial)
 
-**B2B — Empresas:**
-- Acceso a inteligencia de mercado y analíticas de precios
-- Monitoreo de competencia
-- APIs de datos
+**B2B — Empresas (Retailers y Marcas):**
+- Planes Básico / Pro / Premium con acceso a inteligencia de mercado
+- Monitoreo de competencia, datos por sucursal/SKU
+- Event tracking ya implementado como fundación de analíticas B2B
 
 ### Contexto Venezuela:
 - Economía **bimonetaria VES/USD** — todos los precios se muestran en ambas monedas
 - Tasa de cambio oficial del BCV en tiempo real
 - Inflación alta = precios cambian frecuentemente, el scraping constante es crítico
-- Usuario objetivo: consumidor venezolano que quiere ahorrar en su compra semanal sin visitar 5 tiendas
+- Usuario objetivo: consumidor venezolano que quiere ahorrar en su compra semanal
 
 ---
 
@@ -39,7 +39,7 @@ Compa compara precios de productos básicos (alimentos y medicamentos) en Venezu
 | Cache / Sesiones | Redis 7 |
 | Cola de tareas | Celery |
 | ORM | SQLAlchemy 2.0 async |
-| Migraciones | Alembic |
+| Migraciones | Alembic + migraciones SQL manuales |
 | IA | Anthropic API — Claude Haiku (`claude-haiku-4-5`) |
 | Scraping | Scrapy (Python) |
 | Contenedores | Docker + docker-compose |
@@ -67,6 +67,7 @@ Prefijos Docker:
 **URLs de desarrollo:**
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:8000`
+- Variable de entorno frontend: `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1`
 
 ---
 
@@ -77,13 +78,15 @@ compa/
 ├── CONTEXTO_PROYECTO.md          ← Este archivo
 ├── docker-compose.yml
 ├── backend/
+│   ├── .env                       ← Variables reales (gitignored)
+│   ├── .env.example               ← Plantilla de variables
 │   └── app/
-│       ├── main.py
+│       ├── main.py                ← CORS restringido a ALLOWED_ORIGINS
 │       ├── core/
-│       │   ├── config.py
+│       │   ├── config.py          ← Settings con allowed_origins + cors_origins
 │       │   ├── database.py
 │       │   ├── security.py
-│       │   ├── rate_limiter.py
+│       │   ├── rate_limiter.py    ← Redis rate limiting
 │       │   └── exceptions.py
 │       ├── models/
 │       │   ├── catalog.py
@@ -101,9 +104,9 @@ compa/
 │       │   └── v1/
 │       │       ├── router.py
 │       │       └── routers/
-│       │           ├── agent.py       ← Agente IA conversacional ✅ ACTIVO
-│       │           ├── catalog.py     ← Endpoints de catálogo ✅ ACTIVO
-│       │           ├── auth.py        ← Autenticación (pendiente)
+│       │           ├── agent.py       ← Agente IA + Carrito Óptimo ✅ ACTIVO
+│       │           ├── catalog.py     ← Endpoints de catálogo + tasa BCV ✅ ACTIVO
+│       │           ├── auth.py        ← JWT auth (register/login/me) ✅ ACTIVO
 │       │           ├── b2b.py         ← Endpoints B2B (pendiente)
 │       │           ├── webhooks.py    ← WhatsApp webhooks (futuro)
 │       │           └── crowdsource.py ← Crowdsourcing (futuro)
@@ -125,12 +128,20 @@ compa/
 │   └── init_db.py
 ├── alembic/
 │   └── versions/
+├── migrations/
+│   └── 001_add_user_profile_fields.sql  ← Agrega campos de perfil a usuarios
 └── frontend/
+    ├── .env.local                 ← NEXT_PUBLIC_API_URL (gitignored)
+    ├── .env.local.example         ← Plantilla
     └── src/
+        ├── lib/
+        │   └── auth.ts            ← Token helpers (saveAuth, getToken, clearAuth...)
         └── app/
-            ├── page.tsx               ← Landing page ✅ ACTIVO
+            ├── page.tsx           ← Landing page con links a /auth ✅ ACTIVO
+            ├── auth/
+            │   └── page.tsx       ← Login/Registro (tabs, campos opcionales) ✅ ACTIVO
             └── chat/
-                └── page.tsx           ← Interfaz agente IA ✅ ACTIVO
+                └── page.tsx       ← Interfaz agente IA + Carrito Óptimo ✅ ACTIVO
 ```
 
 ---
@@ -212,16 +223,23 @@ valor_usd DECIMAL
 fecha TIMESTAMP
 ```
 
-**`usuarios`** — (pendiente de implementar completamente)
+**`usuarios`** — ✅ ACTIVO con campos de perfil extendidos
 ```sql
 id_usuario UUID PK
 email VARCHAR UNIQUE
-nombre VARCHAR
-plan ENUM('gratis', 'pro')
+nombre_completo VARCHAR
+hashed_password VARCHAR
+plan ENUM('gratis', 'pro', 'b2b_basico', 'b2b_pro', 'b2b_premium')
+fecha_nacimiento DATE          ← Migración 001 ✅
+sexo VARCHAR(20)               ← Migración 001 ✅
+ciudad VARCHAR(100)            ← Migración 001 ✅
+estado_ven VARCHAR(50)         ← 24 estados venezolanos, migración 001 ✅
+telefono_wa VARCHAR(20)        ← Para futura integración WhatsApp
 creado_en TIMESTAMP
+activo BOOLEAN
 ```
 
-**`listas_compras`** — (pendiente de implementar)
+**`listas_compras`** — (pendiente de migración)
 ```sql
 id_lista UUID PK
 id_usuario UUID FK
@@ -229,7 +247,7 @@ nombre VARCHAR
 creado_en TIMESTAMP
 ```
 
-**`items_lista`** — (pendiente de implementar)
+**`items_lista`** — (pendiente de migración)
 ```sql
 id_item UUID PK
 id_lista UUID FK
@@ -271,11 +289,12 @@ Categoría Medicamentos: 79793cc8-0ee2-45d0-a325-4677b2b199bb
 ## 7. API REST — Endpoints Disponibles
 
 ```
-GET  /api/v1/productos/buscar?q=leche     ← Búsqueda de productos
-GET  /api/v1/productos/{id}/precios       ← Precios de un producto por tienda
-GET  /api/v1/cadenas                      ← Lista de cadenas comerciales
-GET  /api/v1/tasa                         ← Tasa BCV actual
-POST /api/v1/agent/chat                   ← Agente IA conversacional
+GET  /api/v1/catalog/buscar?q=leche   ← Búsqueda de productos
+GET  /api/v1/catalog/tasa             ← Tasa BCV actual
+POST /api/v1/agent/chat               ← Agente IA conversacional (rate limited)
+POST /api/v1/auth/register            ← Registro de usuarios ✅
+POST /api/v1/auth/login               ← Login JWT ✅
+GET  /api/v1/auth/me                  ← Perfil del usuario autenticado ✅
 ```
 
 ---
@@ -285,25 +304,45 @@ POST /api/v1/agent/chat                   ← Agente IA conversacional
 **Archivo:** `./backend/app/api/v1/routers/agent.py`
 **Modelo:** `claude-haiku-4-5`
 
-### Flujo completo del agente:
+### Flujo completo del agente (búsqueda individual):
 1. Recibe `mensaje` (string) + `historial` (array de mensajes previos `{role, content}`)
 2. **Clasificación con contexto:** Claude analiza el mensaje CON los últimos 6 mensajes del historial → decide `buscar` o `conversar`, genera hasta 3 términos de búsqueda con variantes semánticas
-3. **Búsqueda en DB:** Query SQL con similitud trigram (threshold **0.30**), sin ILIKE fallback
-4. **Filtrado por relevancia:** Claude evalúa los resultados y descarta productos irrelevantes (ej: descarta "Chocolate con Leche" cuando se busca "leche")
-5. **Generación de respuesta:** Claude genera respuesta útil con los productos filtrados, comparando precios entre tiendas
-6. Retorna `{respuesta, productos[], tipo}`
+3. **Búsqueda en DB:** Query SQL con similitud trigram (threshold **0.35**), sin ILIKE fallback
+4. **Pre-filtro substring (gratis):** Descarta productos cuyo nombre/marca no contiene ninguna palabra clave (≥4 chars) de los términos buscados
+5. **Filtro IA de relevancia:** Claude evalúa los resultados con todos los términos + mensaje original — descarta falsos positivos semánticos
+6. **Generación de respuesta:** Claude genera respuesta útil con productos filtrados, comparando precios
+7. **Event tracking:** `log_consulta()` registra la consulta para analíticas B2B
+8. Retorna `{respuesta, productos[], tipo}`
+
+### Flujo Carrito Óptimo:
+1. Detecta prefijo `"Carrito:"` en el mensaje
+2. Extrae items de la lista
+3. Para cada item × cada tienda: `buscar_item_por_tienda()` con threshold 0.35
+4. `filtrar_carrito_batch()` — Claude valida en batch si los productos encontrados corresponden a lo buscado
+5. `calcular_carrito_optimo()` — agrupa por tienda, calcula totales USD+VES, ordena por precio total
+6. Retorna `{respuesta, carrito: {tiendas[], ahorro_maximo_usd, total_items}, tipo: "carrito"}`
+
+### Rate Limiting:
+- **Anónimo:** 15 requests/minuto por IP
+- **Autenticado:** 40 requests/minuto por user_id
+- Implementado con Redis en `core/rate_limiter.py`
+- Se aplica con `check_rate_limit()` en el endpoint `/agent/chat`
+
+### Anti-falsos-positivos (3 capas):
+1. **Threshold DB:** 0.35 (antes 0.30) — menos productos entran al pipeline
+2. **Pre-filtro substring:** Elimina productos gratis sin llamar a Claude (Frescolita no contiene "leche")
+3. **Filtro IA con contexto completo:** Claude recibe todos los términos + mensaje original del usuario
 
 ### Decisiones de diseño importantes:
-- **Threshold trigram 0.30** (no bajar de aquí — con 0.15 entran demasiados falsos positivos)
-- **Sin ILIKE fallback** — fue eliminado porque matcheaba productos donde la palabra buscada era solo un ingrediente
-- **Filtro post-búsqueda con IA** — paso esencial para limpiar resultados antes de mostrarlos
+- **Threshold trigram 0.35** — subido de 0.30 para reducir falsos positivos
+- **Sin ILIKE fallback** — fue eliminado porque matcheaba ingredientes secundarios
+- **Filtro post-búsqueda con IA** — paso esencial para limpiar resultados
 - **Ordenamiento por precio mínimo** — no por similitud trigram
 - **Límite de 5 productos** por respuesta
 - **Memoria conversacional** — historial de últimos 6 mensajes pasa al clasificador
-- **Prompts `system` separados** del mensaje `user` (mejor control del modelo)
 
 ### Reglas del agente (RESPONSE_SYSTEM prompt):
-- NUNCA sugerir "revisar en otros supermercados" — eso es exactamente lo que Compa hace por el usuario
+- NUNCA sugerir "revisar en otros supermercados" — eso es exactamente lo que Compa hace
 - SIEMPRE comparar tiendas cuando hay más de una opción disponible
 - Mostrar precios siempre en USD y Bs
 - Tono profesional y directo, español venezolano natural
@@ -311,78 +350,70 @@ POST /api/v1/agent/chat                   ← Agente IA conversacional
 
 ---
 
-## 9. Frontend — Estado Actual
+## 9. Autenticación — Estado Actual ✅
 
-**Archivo:** `./frontend/src/app/chat/page.tsx`
+**Backend:** `./backend/app/api/v1/routers/auth.py`
+**Frontend:** `./frontend/src/app/auth/page.tsx` + `./frontend/src/lib/auth.ts`
 
 ### Implementado:
-- Sidebar con historial (hardcodeado), botón "Nueva consulta"
-- Header con ubicación (Maracay, Aragua — hardcodeado) y tasa BCV
-- Chat completo con mensajes usuario/agente
-- **`renderMarkdown()`** — convierte `**texto**` en negritas reales
-- **`ProductCard`** — tarjeta individual por producto con:
-  - Badge "Mejor precio" en el más barato
-  - Nombre, marca, presentación, precio USD + Bs, tienda en verde
-  - Comparación de tiendas expandida si hay más de una
-- Botones "Ver otra marca" (rellena el input) y "Añadir a la lista" (sin funcionalidad aún)
-- Sugerencias rápidas en pantalla vacía
-- Typing indicator animado
-- Planes visible en sidebar: "Plan Gratis" / "Mejorar a Pro ✨"
+- Registro con campos: email, contraseña, nombre completo
+- Campos opcionales en registro: fecha nacimiento, sexo, ciudad, estado venezolano (24 estados), teléfono WhatsApp
+- Login con JWT (HS256, 24h de expiración)
+- Token guardado en `localStorage` vía `lib/auth.ts`
+- `/me` endpoint para validar token y obtener perfil
+- Sidebar del chat muestra usuario real o "Invitado" si no está autenticado
+- Botón de logout (ícono settings en el sidebar)
 
-### Bugs conocidos pendientes:
-- Botones "Ver otra marca" / "Añadir a la lista" aparecen en el header en algunos casos (CSS)
-- Historial de conversaciones hardcodeado (no persiste)
+### Migración aplicada:
+`migrations/001_add_user_profile_fields.sql` — agrega `fecha_nacimiento`, `sexo`, `ciudad`, `estado_ven` a `usuarios`
 
----
-
-## 10. Funcionalidad de Listas de Compras — PRÓXIMO A IMPLEMENTAR
-
-**Esta es la funcionalidad central del producto — el "Carrito Óptimo".**
-
-### Visión exacta:
-El usuario envía una lista de productos (en lenguaje natural o por interfaz) y Compa calcula dónde le sale más barata la compra **total**, no producto por producto.
-
-### Lógica del Carrito Óptimo:
-- **Opción 1 — Todo en una tienda:** Calcular el total de la lista en cada tienda disponible y recomendar la más barata en total (aunque algún producto individual sea más caro ahí)
-- **Opción 2 — Compra dividida (máximo 2 tiendas):** Evaluar si dividir la compra entre 2 tiendas genera un ahorro significativo vs ir a una sola
-- Mostrar el **ahorro estimado** vs la opción más cara
-- Considerar productos que no están disponibles en todas las tiendas
-
-### Ejemplo de output esperado:
-```
-Lista: leche, arroz, pañales, jabón
-
-🏆 Mejor opción — Todo en Excelsior Gama: $18.50
-   Ahorro vs opción más cara: $4.20
-
-📍 Alternativa dividida:
-   Excelsior Gama (leche, arroz, jabón): $12.30
-   Farmatodo (pañales): $4.80
-   Total: $17.10 — Ahorro adicional: $1.40 (pero requiere ir a 2 tiendas)
-```
-
-### Tablas DB necesarias (pendientes de migración):
-- `listas_compras` — listas guardadas por usuario
-- `items_lista` — productos dentro de cada lista
-
-### Decisiones pendientes de tomar:
-- ¿Input por chat ("necesito leche, arroz y pañales") o interfaz dedicada de lista?
-- ¿Implementar compra dividida en v1 o solo "todo en una tienda"?
-- ¿Las listas anónimas (sin registro) se guardan en sesión Redis o no se guardan?
+### Pendiente:
+- Verificación de email
+- Recuperación de contraseña
+- Integración WhatsApp como canal de auth alternativo (Fase 5)
 
 ---
 
-## 11. Registro de Usuarios y Membresías
+## 10. Frontend — Estado Actual ✅
 
-### Planes:
-- **Plan Gratis:** Acceso al agente, comparación básica, sin listas guardadas
-- **Plan Pro ✨:** Listas guardadas, alertas de precio, historial, funciones avanzadas
+**Archivos:**
+- `./frontend/src/app/chat/page.tsx` — Chat principal
+- `./frontend/src/app/auth/page.tsx` — Login/Registro
+- `./frontend/src/app/page.tsx` — Landing page
+- `./frontend/src/lib/auth.ts` — Helpers de token
 
-### Estado: Pendiente de implementar
-- Las tablas de `usuarios` existen en el schema pero la autenticación no está activa
-- La UI ya muestra el plan ("Plan Gratis" / "Mejorar a Pro ✨") pero sin backend real
-- Implementar con JWT (ya configurado en `security.py`)
-- Pagos futuros con Stripe
+### Implementado en chat:
+- Sidebar con **historial real** de conversaciones (localStorage, máx 30, agrupado Hoy/Ayer/Anterior)
+- Botón "Nueva consulta" para resetear estado
+- Header con ubicación (hardcoded) y tasa BCV **dinámica** (fetch a `/catalog/tasa`)
+- **`renderMarkdown()`** — convierte `**texto**` en negritas
+- **`ProductCard`** — badge "Mejor precio", nombre, marca, presentación, USD+Bs, comparación multi-tienda
+- **`CartOptimalCard`** — totales por tienda, desglose item por item, badge "Lista incompleta"
+- **"Añadir a la lista"** — botón en cada respuesta de productos, acumula items en estado
+- **Widget flotante** — aparece cuando hay items en lista, muestra count + "Calcular carrito" CTA
+- Usuario real en sidebar (nombre + plan) o "Invitado" con link a `/auth`
+- Botón logout
+- Todas las URLs usan `NEXT_PUBLIC_API_URL` (no hardcoded)
+
+### Landing page:
+- Botones "Iniciar sesión" → `/auth` y "Registrarse gratis" → `/auth?mode=register`
+- Secciones: hero, logos (Walmart/Farmatodo/etc.), features B2C, features B2B, CTA final
+
+---
+
+## 11. CORS y Variables de Entorno
+
+### Backend:
+- CORS restringido a `ALLOWED_ORIGINS` (lista separada por comas)
+- Desarrollo: `ALLOWED_ORIGINS=http://localhost:3000`
+- Producción: `ALLOWED_ORIGINS=https://app.compa.com,https://compa.com`
+- Métodos permitidos: GET, POST, PUT, DELETE, OPTIONS
+- Headers permitidos: Authorization, Content-Type
+
+### Frontend:
+- `NEXT_PUBLIC_API_URL` — URL base del API
+- Desarrollo: `http://localhost:8000/api/v1` (en `.env.local`)
+- Producción: `https://api.compa.com/api/v1` (en `.env.production.local`)
 
 ---
 
@@ -392,7 +423,8 @@ Lista: leche, arroz, pañales, jabón
 - El usuario podrá enviar su lista de compras por WhatsApp
 - El agente responde con el Carrito Óptimo directamente en el chat
 - Integración via Meta Business API + webhooks
-- Archivo base ya existe: `./backend/app/services/whatsapp/`
+- `telefono_wa` ya está en la tabla `usuarios`
+- Archivo base existe: `./backend/app/services/whatsapp/`
 
 ---
 
@@ -403,26 +435,40 @@ Lista: leche, arroz, pañales, jabón
 | 1 | ✅ Completo | Docker + DB + FastAPI + tasa BCV |
 | 2 | ✅ Completo | 5 scrapers + normalizador IA |
 | 3 | ✅ Completo | Agente conversacional + endpoints de búsqueda |
-| 4 | 🔄 En progreso | Frontend Next.js + chat del agente |
-| 4.1 | 🔴 Próximo | Listas de compras / Carrito Óptimo |
-| 4.2 | 🔴 Próximo | Registro de usuarios + membresías |
-| 5 | ⏳ Futuro | WhatsApp + Stripe + crowdsourcing |
+| 4 | ✅ Completo | Frontend Next.js + chat del agente |
+| 4.1 | ✅ Completo | Carrito Óptimo (comparación multi-tienda) |
+| 4.2 | ✅ Completo | Autenticación JWT + registro con perfil venezolano |
+| 4.3 | ✅ Completo | Rate limiting + event tracking + anti-falsos-positivos |
+| 4.4 | ✅ Completo | Historial real + lista de compras frontend + CORS + env vars |
+| 5 | 🔴 Próximo | Actualizar scrapers (precios desactualizados) |
+| 6 | ⏳ Futuro | Dashboard B2B + planes de pago Stripe |
+| 7 | ⏳ Futuro | WhatsApp + crowdsourcing |
 
 ---
 
-## 14. Variables de Entorno (.env desarrollo)
+## 14. Variables de Entorno
 
+### Backend (`.env`):
 ```env
-DATABASE_URL=postgresql+asyncpg://compa_user:compa_pass@localhost:5432/compa_dev
-REDIS_URL=redis://localhost:6379
-ANTHROPIC_API_KEY=sk-ant-...
-SECRET_KEY=cambia-esto-por-openssl-rand-hex-32
+DATABASE_URL=postgresql+asyncpg://compa_user:compa_pass@compa-db:5432/compa_dev
+REDIS_URL=redis://compa-redis:6379
+SECRET_KEY=<openssl rand -hex 32>
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
 META_WHATSAPP_TOKEN=
 META_PHONE_NUMBER_ID=
 META_VERIFY_TOKEN=
 STRIPE_SECRET_KEY=
+ALLOWED_ORIGINS=http://localhost:3000
+ENV=development
+LOG_LEVEL=INFO
+```
+
+### Frontend (`.env.local`):
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 ```
 
 ---
@@ -446,8 +492,8 @@ docker exec compa-db psql -U compa_user -d compa_dev
 # Query rápida en DB
 docker exec compa-db psql -U compa_user -d compa_dev -c "SELECT COUNT(*) FROM productos_maestros;"
 
-# Frontend — hot reload activo, no necesita reinicio
-cp ~/Downloads/page.tsx ./frontend/src/app/chat/page.tsx
+# Aplicar migración
+docker exec compa-db psql -U compa_user -d compa_dev -f /migrations/001_add_user_profile_fields.sql
 
 # Levantar todo
 docker compose up -d
@@ -460,11 +506,14 @@ docker compose logs -f compa-api
 
 ## 16. Principios y Aprendizajes Técnicos
 
-1. **Trigram sin ILIKE** — el fallback ILIKE trae demasiado ruido. Threshold ≥ 0.30
-2. **Filtro post-búsqueda con IA** — necesario para productos donde la palabra buscada es ingrediente secundario
-3. **Memoria conversacional** — pasar historial al clasificador es esencial para contexto ("otra marca", "más barato", etc.)
+1. **Trigram sin ILIKE** — el fallback ILIKE trae demasiado ruido. Threshold ≥ 0.35
+2. **3 capas anti-falsos-positivos** — DB threshold + substring pre-filter (gratis) + Claude semántico
+3. **Memoria conversacional** — pasar historial al clasificador es esencial ("otra marca", "más barato")
 4. **Gama solo tiene food/despensa** — su e-commerce no cubre higiene, hogar ni bebidas
 5. **Precios siempre en dos monedas** — USD y Bs usando tasa BCV de `historico_tasa_bcv`
-6. **Scrapers frágiles** — selectores CSS cambian frecuentemente; `[class*="price"]` más resiliente que clases específicas
-7. **Normalizador resumable** — solo procesa `PENDIENTE`, esencial cuando se corta el crédito de API a mitad del proceso
+6. **Scrapers frágiles** — selectores CSS cambian frecuentemente; `[class*="price"]` más resiliente
+7. **Normalizador resumable** — solo procesa `PENDIENTE`, esencial cuando se corta el crédito de API
 8. **UUIDs en PostgreSQL** — nunca generar en Python, dejar que la DB los genere con `uuid_generate_v4()`
+9. **TDZ bug React** — si una variable de estado tiene el mismo nombre que una `const` local en el mismo scope, genera `ReferenceError` por zona temporal muerta. Renombrar la variable local.
+10. **`NEXT_PUBLIC_` prefix** — necesario en Next.js para que las env vars sean accesibles en el cliente (browser)
+11. **CORS en producción** — usar `ALLOWED_ORIGINS` en `.env` en lugar de `"*"` para seguridad real

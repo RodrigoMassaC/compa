@@ -45,13 +45,15 @@ app.include_router(api_router, prefix="/api/v1")
 # ── Exception handlers ──
 add_exception_handlers(app)
 
-# ── CORS (permitir cualquier origen en desarrollo) ──
+# ── CORS ──
+# En desarrollo: solo localhost:3000 (configurable via ALLOWED_ORIGINS)
+# En producción: definir ALLOWED_ORIGINS=https://tudominio.com en .env
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.env == "development" else [],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 

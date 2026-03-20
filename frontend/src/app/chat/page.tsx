@@ -3,6 +3,8 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { getUser, getToken, clearAuth, planLabel, type AuthUser } from "@/lib/auth";
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+
 // ── Historial en localStorage ──────────────────────────────────────────────
 const HISTORY_KEY = "compa_historial";
 
@@ -372,7 +374,7 @@ export default function ChatPage() {
   }, [messages, isTyping]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/v1/catalog/tasa")
+    fetch(`${API}/catalog/tasa`)
       .then((r) => r.json())
       .then((d) => {
         if (d?.tasa_usd) setTasaBCV(Number(d.tasa_usd).toLocaleString("es-VE", { minimumFractionDigits: 2 }));
@@ -414,7 +416,7 @@ export default function ChatPage() {
       const token = getToken();
       if (token) headers["Authorization"] = `Bearer ${token}`;
 
-      const response = await fetch("http://localhost:8000/api/v1/agent/chat", {
+      const response = await fetch(`${API}/agent/chat`, {
         method: "POST",
         headers,
         body: JSON.stringify({ mensaje: userMsg.content, historial: historialAPI }),

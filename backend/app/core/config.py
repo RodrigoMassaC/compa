@@ -32,9 +32,17 @@ class Settings(BaseSettings):
     # ── Stripe ──
     stripe_secret_key: str = ""
 
+    # ── CORS — orígenes permitidos (separados por coma en producción) ──
+    allowed_origins: str = "http://localhost:3000"
+
     # ── Ambiente ──
     env: str = "development"
     log_level: str = "INFO"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parsea allowed_origins en lista."""
+        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",
