@@ -347,7 +347,19 @@ export default function ChatPage() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [historial, setHistorial] = useState<Conversacion[]>([]);
   const [convId, setConvId] = useState<string | null>(null);
+  const [listaCompras, setListaCompras] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const addToLista = (nombre: string) => {
+    const clave = nombre.toLowerCase().trim();
+    setListaCompras((prev) => prev.includes(clave) ? prev : [...prev, clave]);
+  };
+
+  const handleCalcCarrito = () => {
+    const query = `Carrito: ${listaCompras.join(", ")}`;
+    setInputValue(query);
+    setListaCompras([]);
+  };
 
   // Cargar usuario e historial desde localStorage al montar
   useEffect(() => {
@@ -634,9 +646,14 @@ export default function ChatPage() {
                           >
                             Ver otra marca
                           </button>
-                          <button className="bg-white border border-[#eaeaea] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
-                            Añadir a la lista
-                          </button>
+                          {msg.products && msg.products[0]?.nombre && (
+                            <button
+                              onClick={() => addToLista(msg.products![0].nombre!)}
+                              className="bg-[#f0f9f5] border border-[#c8eadb] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-[#34a87a] hover:bg-[#e0f4ec] transition-colors"
+                            >
+                              + Añadir a la lista
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -661,6 +678,34 @@ export default function ChatPage() {
             <div ref={messagesEndRef} />
           </div>
         </div>
+
+        {/* Widget flotante de lista de compras */}
+        {listaCompras.length > 0 && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white border border-[#c8eadb] shadow-lg rounded-2xl px-4 py-3 flex items-center gap-3 max-w-sm w-auto">
+            <span className="text-lg">🛒</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-bold text-slate-700">
+                {listaCompras.length} {listaCompras.length === 1 ? "producto" : "productos"} en lista
+              </div>
+              <div className="text-[10px] text-slate-400 truncate">
+                {listaCompras.join(", ")}
+              </div>
+            </div>
+            <button
+              onClick={handleCalcCarrito}
+              className="bg-[#6abf9a] hover:bg-[#5aa987] text-white text-xs font-bold px-3 py-1.5 rounded-full transition-colors whitespace-nowrap"
+            >
+              Calcular carrito
+            </button>
+            <button
+              onClick={() => setListaCompras([])}
+              className="text-slate-300 hover:text-slate-500 text-sm font-bold"
+              title="Limpiar lista"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Input */}
         <div className="absolute bottom-0 w-full bg-gradient-to-t from-[#fbfcff] via-[#fbfcff] to-transparent pt-10 pb-4 px-4 flex flex-col items-center z-10">
