@@ -392,7 +392,7 @@ export default function ChatPage() {
     setInputValue("");
     setIsTyping(true);
 
-    const historial = messages.map((m) => ({
+    const historialAPI = messages.map((m) => ({
       role: m.role === "agent" ? "assistant" : "user",
       content: m.content,
     }));
@@ -405,7 +405,7 @@ export default function ChatPage() {
       const response = await fetch("http://localhost:8000/api/v1/agent/chat", {
         method: "POST",
         headers,
-        body: JSON.stringify({ mensaje: userMsg.content, historial }),
+        body: JSON.stringify({ mensaje: userMsg.content, historial: historialAPI }),
       });
       const data = await response.json();
       setIsTyping(false);
