@@ -37,6 +37,12 @@ const mockChartData = [
     { date: "30/03", usd: 1.5, ves: 57.0 },
 ];
 // --- Types ---
+interface Oferta {
+    cadena?: string;
+    precio_usd?: number;
+    precio_ves?: number;
+}
+
 interface Product {
     nombre?: string;
     marca?: string;
@@ -45,6 +51,7 @@ interface Product {
     precio_ves?: number;
     fecha?: string;
     imagen?: string;
+    ofertas?: Oferta[];
     [key: string]: unknown;
 }
 

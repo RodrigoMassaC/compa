@@ -1,17 +1,11 @@
 "use client";
 import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { saveAuth, type AuthUser } from "@/lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-
-// ── Iconos ───────────────────────────────────────────────────────────────────
-const PiggyBankIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-  </svg>
-);
 
 // ── Estados venezolanos ───────────────────────────────────────────────────────
 const ESTADOS_VEN = [
@@ -95,14 +89,12 @@ function AuthForm() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f7f8fc] flex flex-col items-center justify-center px-4">
+    <div className="min-h-screen bg-[#F5F7FF] flex flex-col items-center justify-center px-4">
       {/* Logo */}
       <Link href="/" className="flex items-center gap-3 mb-8">
-        <div className="bg-[#bdf0db] text-[#34a87a] w-12 h-12 rounded-2xl flex items-center justify-center">
-          <PiggyBankIcon />
-        </div>
+        <Image src="/logo-blue.png" alt="Compa" width={48} height={48} className="rounded-2xl" />
         <div>
-          <h1 className="font-extrabold text-2xl leading-tight text-slate-800">Compa</h1>
+          <h1 className="font-extrabold text-2xl leading-tight text-slate-800 tracking-tight">Compa</h1>
           <p className="text-xs text-slate-400 font-medium">Tu Asistente de Ahorro</p>
         </div>
       </Link>
@@ -131,7 +123,7 @@ function AuthForm() {
           {tab === "register" && (
             <div>
               <label className="block text-xs font-bold text-slate-600 mb-1.5">
-                Nombre completo <span className="text-[#34a87a]">*</span>
+                Nombre completo <span className="text-[#3C5ACB]">*</span>
               </label>
               <input
                 type="text"
@@ -139,7 +131,7 @@ function AuthForm() {
                 value={nombre}
                 onChange={(e) => setNombre(e.target.value)}
                 placeholder="Ej: María González"
-                className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors placeholder:text-slate-400"
+                className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
               />
             </div>
           )}
@@ -147,7 +139,7 @@ function AuthForm() {
           {/* Email */}
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1.5">
-              Correo electrónico <span className="text-[#34a87a]">*</span>
+              Correo electrónico <span className="text-[#3C5ACB]">*</span>
             </label>
             <input
               type="email"
@@ -155,14 +147,14 @@ function AuthForm() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="tucorreo@email.com"
-              className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors placeholder:text-slate-400"
+              className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
             />
           </div>
 
           {/* Contraseña */}
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1.5">
-              Contraseña <span className="text-[#34a87a]">*</span>
+              Contraseña <span className="text-[#3C5ACB]">*</span>
             </label>
             <input
               type="password"
@@ -171,7 +163,7 @@ function AuthForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder={tab === "register" ? "Mínimo 8 caracteres" : "Tu contraseña"}
-              className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors placeholder:text-slate-400"
+              className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
             />
           </div>
 
@@ -181,7 +173,7 @@ function AuthForm() {
               <button
                 type="button"
                 onClick={() => setShowOptional(!showOptional)}
-                className="text-xs font-bold text-[#6abf9a] hover:text-[#34a87a] flex items-center gap-1 mt-1"
+                className="text-xs font-bold text-[#3C5ACB] hover:text-[#3C5ACB] flex items-center gap-1 mt-1"
               >
                 {showOptional ? "▲" : "▼"} Datos adicionales (opcional)
               </button>
@@ -197,7 +189,7 @@ function AuthForm() {
                         value={ciudad}
                         onChange={(e) => setCiudad(e.target.value)}
                         placeholder="Ej: Maracay"
-                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors placeholder:text-slate-400"
+                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
                       />
                     </div>
                     <div>
@@ -205,7 +197,7 @@ function AuthForm() {
                       <select
                         value={estadoVen}
                         onChange={(e) => setEstadoVen(e.target.value)}
-                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors bg-white"
+                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors bg-white"
                       >
                         <option value="">Seleccionar</option>
                         {ESTADOS_VEN.map((est) => (
@@ -222,7 +214,7 @@ function AuthForm() {
                       <select
                         value={sexo}
                         onChange={(e) => setSexo(e.target.value)}
-                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors bg-white"
+                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors bg-white"
                       >
                         <option value="">Seleccionar</option>
                         <option value="M">Masculino</option>
@@ -237,7 +229,7 @@ function AuthForm() {
                         value={fechaNac}
                         max={new Date().toISOString().split("T")[0]}
                         onChange={(e) => setFechaNac(e.target.value)}
-                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors"
+                        className="w-full border border-[#e5e7eb] rounded-xl px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors"
                       />
                     </div>
                   </div>
@@ -252,7 +244,7 @@ function AuthForm() {
                       value={telefonoWa}
                       onChange={(e) => setTelefonoWa(e.target.value)}
                       placeholder="Ej: 04121234567"
-                      className="w-full border border-[#e5e7eb] rounded-xl px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-[#6abf9a] transition-colors placeholder:text-slate-400"
+                      className="w-full border border-[#e5e7eb] rounded-xl px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
                     />
                     <p className="text-[10px] text-slate-400 mt-1">
                       Para usar Compa desde WhatsApp cuando esté disponible
@@ -274,7 +266,7 @@ function AuthForm() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[#6abf9a] hover:bg-[#5aa987] disabled:opacity-60 text-white font-bold py-3.5 rounded-full transition-colors text-sm mt-2"
+            className="w-full bg-[#3C5ACB] hover:bg-[#2F47A8] disabled:opacity-60 text-white font-bold py-3.5 rounded-full transition-colors text-sm mt-2"
           >
             {loading
               ? "Procesando..."
@@ -288,13 +280,13 @@ function AuthForm() {
         <p className="text-center text-xs text-slate-400 mt-6">
           {tab === "login" ? (
             <>¿No tienes cuenta?{" "}
-              <button onClick={() => setTab("register")} className="text-[#6abf9a] font-bold hover:underline">
+              <button onClick={() => setTab("register")} className="text-[#3C5ACB] font-bold hover:underline">
                 Regístrate gratis
               </button>
             </>
           ) : (
             <>¿Ya tienes cuenta?{" "}
-              <button onClick={() => setTab("login")} className="text-[#6abf9a] font-bold hover:underline">
+              <button onClick={() => setTab("login")} className="text-[#3C5ACB] font-bold hover:underline">
                 Inicia sesión
               </button>
             </>

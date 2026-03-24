@@ -1,7 +1,8 @@
 "use client";
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { getUser, getToken, clearAuth, planLabel, type AuthUser } from "@/lib/auth";
+import Image from "next/image";
+import { getUser, getToken, planLabel, type AuthUser } from "@/lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -42,19 +43,9 @@ function agruparPorFecha(lista: Conversacion[]): { hoy: Conversacion[]; ayer: Co
 }
 
 // ── Icons ──────────────────────────────────────────────────────────────────
-const PiggyBankIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-  </svg>
-);
 const ChatIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-  </svg>
-);
-const ClockIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
   </svg>
 );
 const PinIcon = ({ className }: { className?: string }) => (
@@ -194,13 +185,13 @@ function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: bool
   const otrasTiendas = ofertas.filter((o) => o.tienda !== precioMin.tienda);
 
   return (
-    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst ? "border-[#6abf9a]" : "border-[#f0f0f0]"}`}>
+    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst ? "border-[#3C5ACB]" : "border-[#f0f0f0]"}`}>
       {/* Encabezado del producto */}
       <div className="flex justify-between items-start mb-3">
         <div className="flex-1">
           <div className="flex items-center gap-2">
             {isFirst && (
-              <span className="bg-[#e8f8f1] text-[#34a87a] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
+              <span className="bg-[#DDDD4A] text-[#1E2E7A] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
                 Mejor precio
               </span>
             )}
@@ -218,7 +209,7 @@ function ProductCard({ product, isFirst }: { product: ChatProduct; isFirst: bool
             {precioMin.precio_ves?.toLocaleString("es-VE", { minimumFractionDigits: 2 }) ?? "—"} Bs
           </div>
           {precioMin.tienda && (
-            <div className="text-[10px] text-[#6abf9a] font-bold mt-0.5">{precioMin.tienda}</div>
+            <div className="text-[10px] text-[#3C5ACB] font-bold mt-0.5">{precioMin.tienda}</div>
           )}
         </div>
       </div>
@@ -278,13 +269,13 @@ function CartOptimalCard({
   const incompleto = tienda.items_encontrados < totalItems;
 
   return (
-    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst && !incompleto ? "border-[#6abf9a]" : "border-[#f0f0f0]"}`}>
+    <div className={`bg-white border rounded-2xl p-4 shadow-sm ${isFirst && !incompleto ? "border-[#3C5ACB]" : "border-[#f0f0f0]"}`}>
       {/* Header */}
       <div className="flex justify-between items-start mb-3">
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             {isFirst && !incompleto && (
-              <span className="bg-[#e8f8f1] text-[#34a87a] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
+              <span className="bg-[#DDDD4A] text-[#1E2E7A] text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide">
                 Mejor precio
               </span>
             )}
@@ -307,7 +298,7 @@ function CartOptimalCard({
             {tienda.total_ves.toLocaleString("es-VE", { minimumFractionDigits: 2 })} Bs
           </div>
           {isFirst && !incompleto && ahorroMaximo && ahorroMaximo > 0 && (
-            <div className="text-[10px] text-[#34a87a] font-bold mt-0.5">
+            <div className="text-[10px] text-[#3C5ACB] font-bold mt-0.5">
               Ahorra ${ahorroMaximo.toFixed(2)}
             </div>
           )}
@@ -319,7 +310,7 @@ function CartOptimalCard({
         {tienda.items.map((item, idx) => (
           <div key={idx} className="flex justify-between items-start gap-2">
             <div className="flex items-start gap-2 flex-1 min-w-0">
-              <span className={`text-xs mt-0.5 font-bold flex-shrink-0 ${item.disponible ? "text-[#34a87a]" : "text-slate-300"}`}>
+              <span className={`text-xs mt-0.5 font-bold flex-shrink-0 ${item.disponible ? "text-[#3C5ACB]" : "text-slate-300"}`}>
                 {item.disponible ? "✓" : "✗"}
               </span>
               <div className="min-w-0">
@@ -467,22 +458,20 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex h-screen bg-[#fbfcff] font-sans text-slate-800">
+    <div className="flex h-screen bg-[#F5F7FF] font-sans text-slate-800">
       {/* SIDEBAR */}
       <aside className="w-[280px] border-r border-[#ebecf0] bg-white hidden md:flex flex-col justify-between">
         <div className="p-6">
           <Link href="/" className="flex items-center gap-3">
-            <div className="bg-[#bdf0db] text-[#34a87a] w-10 h-10 rounded-xl flex items-center justify-center">
-              <PiggyBankIcon className="w-6 h-6" />
-            </div>
+            <Image src="/logo-blue.png" alt="Compa" width={44} height={44} className="rounded-xl" />
             <div>
-              <h1 className="font-extrabold text-xl leading-tight">Compa</h1>
+              <h1 className="font-extrabold text-xl leading-tight tracking-tight">Compa</h1>
               <p className="text-xs text-slate-400 font-medium">Tu Asistente de Ahorro</p>
             </div>
           </Link>
 
           <button
-            className="w-full mt-8 bg-[#6abf9a] hover:bg-[#5aa987] text-white font-bold py-3 px-4 rounded-full flex items-center justify-center gap-2 transition-colors"
+            className="w-full mt-8 bg-[#3C5ACB] hover:bg-[#2F47A8] text-white font-bold py-3 px-4 rounded-full flex items-center justify-center gap-2 transition-colors"
             onClick={() => { setMessages([]); setConvId(null); }}
           >
             <span className="text-xl leading-none">+</span> Nueva consulta
@@ -502,11 +491,11 @@ export default function ChatPage() {
                             onClick={() => { setMessages(conv.messages); setConvId(conv.id); }}
                             className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors text-left truncate ${
                               conv.id === convId
-                                ? "bg-[#f0f9f5] border border-[#e0f3eb] text-slate-700"
+                                ? "bg-[#EEF1FD] border border-[#DDE4FA] text-slate-700"
                                 : "text-slate-500 hover:bg-slate-50"
                             }`}
                           >
-                            <ChatIcon className={`w-4 h-4 flex-shrink-0 ${conv.id === convId ? "text-[#6abf9a]" : "text-slate-300"}`} />
+                            <ChatIcon className={`w-4 h-4 flex-shrink-0 ${conv.id === convId ? "text-[#3C5ACB]" : "text-slate-300"}`} />
                             <span className="truncate">{conv.titulo}</span>
                           </button>
                         </li>
@@ -528,9 +517,9 @@ export default function ChatPage() {
         </div>
 
         <div className="p-4">
-          <div className="bg-[#f6f5ff] rounded-2xl p-4 flex items-center justify-between border border-[#efedfb]">
+          <div className="bg-[#EEF1FD] rounded-2xl p-4 flex items-center justify-between border border-[#DDE4FA]">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#958afa]">
+              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-[#3C5ACB]">
                 <UserIcon className="w-6 h-6" />
               </div>
               <div>
@@ -538,15 +527,15 @@ export default function ChatPage() {
                   {currentUser?.nombre_completo ?? "Invitado"}
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                  <span className="w-1.5 h-1.5 bg-[#6abf9a] rounded-full"></span>
+                  <span className="w-1.5 h-1.5 bg-[#3C5ACB] rounded-full"></span>
                   {currentUser ? planLabel(currentUser.plan) : "Sin cuenta"}
                 </div>
                 {currentUser ? (
-                  <a href="#pro" className="text-xs font-bold text-[#6abf9a] inline-block mt-0.5">
+                  <a href="#pro" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5">
                     Mejorar a Pro ✨
                   </a>
                 ) : (
-                  <Link href="/auth" className="text-xs font-bold text-[#6abf9a] inline-block mt-0.5">
+                  <Link href="/auth" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5">
                     Iniciar sesión →
                   </Link>
                 )}
@@ -571,15 +560,13 @@ export default function ChatPage() {
         {/* Mobile top bar */}
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-[#ebecf0] z-20 flex-shrink-0">
           <Link href="/" className="flex items-center gap-2">
-            <div className="bg-[#bdf0db] text-[#34a87a] w-8 h-8 rounded-lg flex items-center justify-center">
-              <PiggyBankIcon className="w-5 h-5" />
-            </div>
-            <span className="font-extrabold text-base">Compa</span>
+            <Image src="/logo-blue.png" alt="Compa" width={32} height={32} className="rounded-lg" />
+            <span className="font-extrabold text-base tracking-tight">Compa</span>
           </Link>
           <div className="flex items-center gap-3">
             <button
               onClick={() => { setMessages([]); setConvId(null); }}
-              className="text-xs font-bold text-[#34a87a] bg-[#f0f9f5] border border-[#c8eadb] px-3 py-1.5 rounded-full"
+              className="text-xs font-bold text-[#3C5ACB] bg-[#EEF1FD] border border-[#BCC8F5] px-3 py-1.5 rounded-full"
             >
               + Nueva
             </button>
@@ -590,9 +577,9 @@ export default function ChatPage() {
         </div>
 
         {/* Header (desktop gradient) */}
-        <header className="absolute top-0 w-full pt-4 px-4 pb-10 hidden md:flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff] to-transparent">
+        <header className="absolute top-0 w-full pt-4 px-4 pb-10 hidden md:flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#F5F7FF] via-[#F5F7FF] to-transparent">
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
-            <PinIcon className="w-4 h-4 text-[#6abf9a]" />
+            <PinIcon className="w-4 h-4 text-[#3C5ACB]" />
             Maracay, Aragua
           </div>
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
@@ -608,8 +595,8 @@ export default function ChatPage() {
             {/* Estado vacío */}
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center mt-20 text-slate-400">
-                <div className="bg-[#bdf0db] w-16 h-16 rounded-full flex items-center justify-center text-[#34a87a] mb-4">
-                  <PiggyBankIcon className="w-8 h-8" />
+                <div className="mb-4">
+                  <Image src="/logo-blue.png" alt="Compa" width={64} height={64} className="rounded-2xl" />
                 </div>
                 <p className="font-medium text-lg">¿Qué vamos a comprar hoy?</p>
                 <p className="text-sm mt-2">Pregúntame sobre precios en supermercados y farmacias.</p>
@@ -636,7 +623,7 @@ export default function ChatPage() {
                   </div>
                 ) : (
                   <div className="flex gap-4 w-full">
-                    <div className="w-10 h-10 rounded-full bg-[#8bcab8] flex items-center justify-center text-white flex-shrink-0 mt-1 shadow-sm">
+                    <div className="w-10 h-10 rounded-full bg-[#6B7FD7] flex items-center justify-center text-white flex-shrink-0 mt-1 shadow-sm">
                       <RobotIcon className="w-6 h-6" />
                     </div>
                     <div className="flex-1">
@@ -681,7 +668,7 @@ export default function ChatPage() {
                           {msg.products && msg.products[0]?.nombre && (
                             <button
                               onClick={() => addToLista(msg.products![0].nombre!)}
-                              className="bg-[#f0f9f5] border border-[#c8eadb] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-[#34a87a] hover:bg-[#e0f4ec] transition-colors"
+                              className="bg-[#EEF1FD] border border-[#BCC8F5] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-[#3C5ACB] hover:bg-[#e0f4ec] transition-colors"
                             >
                               + Añadir a la lista
                             </button>
@@ -697,7 +684,7 @@ export default function ChatPage() {
             {/* Typing indicator */}
             {isTyping && (
               <div className="flex gap-4">
-                <div className="w-10 h-10 rounded-full bg-[#8bcab8] flex items-center justify-center text-white flex-shrink-0">
+                <div className="w-10 h-10 rounded-full bg-[#6B7FD7] flex items-center justify-center text-white flex-shrink-0">
                   <RobotIcon className="w-6 h-6" />
                 </div>
                 <div className="flex gap-1 items-center mt-3">
@@ -713,7 +700,7 @@ export default function ChatPage() {
 
         {/* Widget flotante de lista de compras */}
         {listaCompras.length > 0 && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white border border-[#c8eadb] shadow-lg rounded-2xl px-4 py-3 flex items-center gap-3 max-w-sm w-auto">
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white border border-[#BCC8F5] shadow-lg rounded-2xl px-4 py-3 flex items-center gap-3 max-w-sm w-auto">
             <span className="text-lg">🛒</span>
             <div className="flex-1 min-w-0">
               <div className="text-xs font-bold text-slate-700">
@@ -725,7 +712,7 @@ export default function ChatPage() {
             </div>
             <button
               onClick={handleCalcCarrito}
-              className="bg-[#6abf9a] hover:bg-[#5aa987] text-white text-xs font-bold px-3 py-1.5 rounded-full transition-colors whitespace-nowrap"
+              className="bg-[#3C5ACB] hover:bg-[#2F47A8] text-white text-xs font-bold px-3 py-1.5 rounded-full transition-colors whitespace-nowrap"
             >
               Calcular carrito
             </button>
@@ -740,7 +727,7 @@ export default function ChatPage() {
         )}
 
         {/* Input */}
-        <div className="absolute bottom-0 w-full bg-gradient-to-t from-[#fbfcff] via-[#fbfcff] to-transparent pt-10 pb-4 px-4 flex flex-col items-center z-10">
+        <div className="absolute bottom-0 w-full bg-gradient-to-t from-[#F5F7FF] via-[#F5F7FF] to-transparent pt-10 pb-4 px-4 flex flex-col items-center z-10">
           <div className="w-full max-w-3xl flex items-center bg-white border border-[#e5e5e5] shadow-sm rounded-full p-2 gap-3 focus-within:border-slate-300 transition-all">
             <button className="p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-50 ml-1">
               <ImageIcon className="w-5 h-5" />
@@ -758,7 +745,7 @@ export default function ChatPage() {
               <MicIcon className="w-5 h-5" />
             </button>
             <button
-              className="w-10 h-10 bg-[#6dbf9c] hover:bg-[#5aa987] rounded-full flex items-center justify-center text-white transition-colors disabled:opacity-50"
+              className="w-10 h-10 bg-[#3C5ACB] hover:bg-[#2F47A8] rounded-full flex items-center justify-center text-white transition-colors disabled:opacity-50"
               onClick={handleSend}
               disabled={isTyping || !inputValue.trim()}
             >
