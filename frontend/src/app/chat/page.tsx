@@ -567,8 +567,30 @@ export default function ChatPage() {
 
       {/* ÁREA PRINCIPAL */}
       <main className="flex-1 flex flex-col relative h-full overflow-hidden">
-        {/* Header */}
-        <header className="absolute top-0 w-full pt-4 px-4 pb-10 flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff] to-transparent">
+
+        {/* Mobile top bar */}
+        <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-[#ebecf0] z-20 flex-shrink-0">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="bg-[#bdf0db] text-[#34a87a] w-8 h-8 rounded-lg flex items-center justify-center">
+              <PiggyBankIcon className="w-5 h-5" />
+            </div>
+            <span className="font-extrabold text-base">Compa</span>
+          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { setMessages([]); setConvId(null); }}
+              className="text-xs font-bold text-[#34a87a] bg-[#f0f9f5] border border-[#c8eadb] px-3 py-1.5 rounded-full"
+            >
+              + Nueva
+            </button>
+            <Link href={currentUser ? "/perfil" : "/auth"}>
+              <UserIcon className="w-6 h-6 text-slate-400" />
+            </Link>
+          </div>
+        </div>
+
+        {/* Header (desktop gradient) */}
+        <header className="absolute top-0 w-full pt-4 px-4 pb-10 hidden md:flex justify-between z-10 pointer-events-none bg-gradient-to-b from-[#fbfcff] via-[#fbfcff] to-transparent">
           <div className="bg-white/80 backdrop-blur-md border border-slate-100 shadow-sm rounded-full px-4 py-2 flex items-center gap-2 text-xs font-bold text-slate-600 pointer-events-auto">
             <PinIcon className="w-4 h-4 text-[#6abf9a]" />
             Maracay, Aragua
@@ -580,7 +602,7 @@ export default function ChatPage() {
         </header>
 
         {/* Mensajes */}
-        <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-24 flex flex-col items-center">
+        <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-4 md:pt-24 flex flex-col items-center">
           <div className="w-full max-w-3xl flex flex-col gap-6">
 
             {/* Estado vacío */}

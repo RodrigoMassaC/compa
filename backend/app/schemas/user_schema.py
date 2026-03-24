@@ -96,3 +96,32 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+# ── Actualizar perfil ─────────────────────────────────────────────────────────
+
+class UserUpdate(BaseModel):
+    """Body para PUT /auth/me — todos los campos son opcionales"""
+    nombre_completo: Optional[str] = None
+    ciudad: Optional[str] = None
+    estado_ven: Optional[str] = None
+    sexo: Optional[str] = None
+    telefono_wa: Optional[str] = None
+    fecha_nacimiento: Optional[date] = None
+
+    @field_validator("sexo")
+    @classmethod
+    def sexo_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.upper() not in ("M", "F", "OTRO"):
+            raise ValueError("sexo debe ser M, F u OTRO")
+        return v.upper() if v else None
+
+    @field_validator("telefono_wa")
+    @classmethod
+    def telefono_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = re.sub(r"[^\d]", "", v)
+        if len(cleaned) < 10:
+            raise ValueError("Número de WhatsApp inválido")
+        return cleaned

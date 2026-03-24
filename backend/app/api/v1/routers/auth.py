@@ -17,7 +17,7 @@ from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError, ValidationError
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.api.dependencies import get_current_user
-from app.schemas.user_schema import TokenResponse, UserCreate, UserLogin, UserResponse
+from app.schemas.user_schema import TokenResponse, UserCreate, UserLogin, UserResponse, UserUpdate
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -183,3 +183,52 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
 async def me(current_user: dict = Depends(get_current_user)):
     """Retorna el perfil del usuario autenticado."""
     return _row_to_user_response(current_user)
+
+
+# ── PUT /me ───────────────────────────────────────────────────────────────────
+
+@router.put("/me", response_model=UserResponse)
+async def update_me(
+    body: UserUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Actualiza los datos del perfil del usuario autenticado."""
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return _row_to_user_response(current_user)
+
+    # Verificar teléfono WA único si se cambia
+    if "telefono_wa" in updates and updates["telefono_wa"] != current_user.get("telefono_wa"):
+        existing = await db.execute(
+            text("SELECT 1 FROM usuarios WHERE telefono_wa = :wa AND id_usuario != CAST(:id AS uuid) LIMIT 1"),
+            {"wa": updates["telefono_wa"], "id": current_user["id_usuario"]},
+        )
+        if existing.scalar():
+            raise ValidationError("Ese número de WhatsApp ya está registrado")
+
+    set_clauses = ", ".join(f"{col} = :{col}" for col in updates)
+    params = {**updates, "id": current_user["id_usuario"]}
+
+    await db.execute(
+        text(f"UPDATE usuarios SET {set_clauses} WHERE id_usuario = CAST(:id AS uuid)"),
+        params,
+    )
+    await db.commit()
+
+    # Releer el usuario actualizado
+    result = await db.execute(
+        text("""
+            SELECT u.id_usuario::text, u.email, u.nombre_completo, u.rol_usuario,
+                   u.telefono_wa, u.ciudad, u.estado_ven, u.sexo,
+                   u.estado_suscripcion, u.creado_en, u.ultimo_login,
+                   COALESCE(pm.codigo_plan, 'FREE') AS plan
+            FROM usuarios u
+            LEFT JOIN planes_membresia pm ON pm.id_plan = u.id_plan_actual
+            WHERE u.id_usuario = CAST(:id AS uuid)
+        """),
+        {"id": current_user["id_usuario"]},
+    )
+    row = result.mappings().first()
+    logger.info("update_me | id=%s campos=%s", current_user["id_usuario"], list(updates.keys()))
+    return _row_to_user_response(dict(row))
