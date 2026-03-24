@@ -1,145 +1,87 @@
 """
 Tareas Celery de Compa.
-Incluye la tarea CRON que descarga la tasa BCV diariamente.
-
-Regla de arquitectura: NUNCA hacer UPDATE en historico_tasa_bcv, solo INSERT.
+Cada tarea wrappea un spider async dentro de asyncio.run()
+para ser compatible con el worker síncrono de Celery.
 """
 import asyncio
 import logging
-from datetime import date, datetime
-from decimal import Decimal
-
-import httpx
-import asyncpg
-from bs4 import BeautifulSoup
 
 from worker.celery_app import celery_app
-from app.core.config import settings
-from app.services.ai_agent.tools.normalizer import ProductNormalizer
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_bcv_rate(html: str) -> Decimal | None:
-    """
-    Extrae la tasa USD del HTML de la página del BCV.
-    La tasa se publica en <div id="dolar"> dentro de la sección de tasas.
-    """
-    soup = BeautifulSoup(html, "lxml")
-
-    # Buscar el bloque de tasa del dólar en la página del BCV
-    dolar_block = soup.find("div", {"id": "dolar"})
-    if not dolar_block:
-        # Intento alternativo: buscar el valor en tabla de tasas
-        dolar_block = soup.find("strong", string=lambda t: t and "USD" in t)
-
-    if dolar_block:
-        # El valor numérico suele estar en <strong> dentro del bloque
-        strong_tag = dolar_block.find("strong")
-        if strong_tag:
-            raw_value = strong_tag.get_text(strip=True)
-            # El BCV usa coma como separador decimal: "36,45" → "36.45"
-            normalized = raw_value.replace(",", ".").strip()
-            try:
-                return Decimal(normalized)
-            except Exception:
-                pass
-
-    logger.warning("No se pudo extraer la tasa BCV del HTML recibido.")
-    return None
+def _run_async(coro):
+    """Ejecuta una coroutine asyncio desde un task Celery (sync)."""
+    return asyncio.run(coro)
 
 
-async def _save_rate_async(valor_usd: Decimal) -> None:
-    """
-    Guarda la tasa BCV en historico_tasa_bcv usando asyncpg.
-    Solo INSERT — nunca UPDATE (regla de arquitectura #1).
-    """
-    raw_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-    conn = await asyncpg.connect(raw_url)
+# ── Tasa BCV ─────────────────────────────────────────────────────────────────
+
+@celery_app.task(name="worker.tasks.run_tasa_bcv", bind=True, max_retries=3)
+def run_tasa_bcv(self):
+    """Actualiza la tasa BCV desde la fuente oficial."""
     try:
-        today = date.today()
-        await conn.execute(
-            """
-            INSERT INTO historico_tasa_bcv (fecha, valor_usd, fuente)
-            VALUES ($1, $2, 'BCV')
-            ON CONFLICT (fecha) DO NOTHING
-            """,
-            today,
-            valor_usd,
-        )
-        logger.info(f"Tasa BCV guardada: {today} → {valor_usd} USD/VES")
-    finally:
-        await conn.close()
-
-
-@celery_app.task(
-    name="worker.tasks.fetch_bcv_rate",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=300,  # Reintentar en 5 minutos si falla
-)
-def fetch_bcv_rate(self) -> dict:
-    """
-    Descarga la tasa oficial USD/VES del BCV y la guarda en historico_tasa_bcv.
-    Se ejecuta diariamente a las 6:00 AM hora de Caracas (10:00 AM UTC).
-    """
-    bcv_url = "https://www.bcv.org.ve/"
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (compatible; CompaBot/1.0; "
-            "+https://compa.com.ve/bot)"
-        )
-    }
-
-    try:
-        logger.info(f"[BCV] Iniciando descarga de tasa — {datetime.utcnow()}")
-
-        # Obtener la página del BCV de forma síncrona (Celery no es async)
-        with httpx.Client(timeout=30, headers=headers, verify=False) as client:
-            response = client.get(bcv_url)
-            response.raise_for_status()
-
-        # Parsear la tasa del HTML
-        valor_usd = _parse_bcv_rate(response.text)
-        if valor_usd is None:
-            raise ValueError("No se pudo extraer la tasa BCV del HTML.")
-
-        # Guardar en la DB usando asyncpg en un loop async temporal
-        asyncio.run(_save_rate_async(valor_usd))
-
-        resultado = {
-            "fecha": str(date.today()),
-            "valor_usd": str(valor_usd),
-            "fuente": "BCV",
-        }
-        logger.info(f"[BCV] Tasa guardada: {resultado}")
-        return resultado
-
+        from app.services.scraper.spiders.tasa_bcv import actualizar_tasa_bcv
+        _run_async(actualizar_tasa_bcv())
+        logger.info("run_tasa_bcv: completado")
+    except ImportError:
+        # Spider de tasa BCV aún no implementado — skip silencioso
+        logger.warning("run_tasa_bcv: spider no disponible, skip")
     except Exception as exc:
-        logger.error(f"[BCV] Error al obtener tasa: {exc}")
-        # Reintentar automáticamente hasta 3 veces
-        raise self.retry(exc=exc)
+        logger.error("run_tasa_bcv falló: %s", exc)
+        raise self.retry(exc=exc, countdown=60)
 
 
-@celery_app.task(
-    name="worker.tasks.normalize_pending_products",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=120,  # Reintentar en 2 mins si hay problema de API
-)
-def normalize_pending_products(self) -> dict:
-    """
-    Tarea que ejecuta la normalización de productos usando IA (Claude).
-    Procesa lotes de 20 productos_crudos PENDIENTES.
-    Se ejecuta automáticamente cada 6 horas vía Celery Beat o de forma manual.
-    """
+# ── Price Scrapers ────────────────────────────────────────────────────────────
+
+@celery_app.task(name="worker.tasks.run_farmago_prices", bind=True, max_retries=2)
+def run_farmago_prices(self):
+    """Actualiza precios de Farmago."""
     try:
-        logger.info("[NORM_IA] Iniciando tarea de normalización con Claude (lote de 20)...")
-        normalizer = ProductNormalizer(batch_size=20)
-        resultado = asyncio.run(normalizer.run())
-        
-        logger.info(f"[NORM_IA] Tarea finalizada. Stats: {resultado}")
-        return resultado
+        from app.services.scraper.spiders.farmago_prices import FarmagoPriceSpider
+        logger.info("run_farmago_prices: iniciando...")
+        _run_async(FarmagoPriceSpider().run())
+        logger.info("run_farmago_prices: completado")
     except Exception as exc:
-        logger.error(f"[NORM_IA] Error fatal en tarea de normalización: {exc}")
-        raise self.retry(exc=exc)
+        logger.error("run_farmago_prices falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_farmatodo_prices", bind=True, max_retries=2)
+def run_farmatodo_prices(self):
+    """Actualiza precios de Farmatodo."""
+    try:
+        from app.services.scraper.spiders.farmatodo_prices import FarmatodoPriceSpider
+        logger.info("run_farmatodo_prices: iniciando...")
+        _run_async(FarmatodoPriceSpider().run())
+        logger.info("run_farmatodo_prices: completado")
+    except Exception as exc:
+        logger.error("run_farmatodo_prices falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_madeirense_prices", bind=True, max_retries=2)
+def run_madeirense_prices(self):
+    """Actualiza precios de Central Madeirense."""
+    try:
+        from app.services.scraper.spiders.central_madeirense_prices import MadeirensePriceSpider
+        logger.info("run_madeirense_prices: iniciando...")
+        _run_async(MadeirensePriceSpider().run())
+        logger.info("run_madeirense_prices: completado")
+    except Exception as exc:
+        logger.error("run_madeirense_prices falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_locatel_prices", bind=True, max_retries=2)
+def run_locatel_prices(self):
+    """Actualiza precios de Locatel."""
+    try:
+        from app.services.scraper.spiders.locatel_prices import LocatelPriceSpider
+        logger.info("run_locatel_prices: iniciando...")
+        _run_async(LocatelPriceSpider().run())
+        logger.info("run_locatel_prices: completado")
+    except Exception as exc:
+        logger.error("run_locatel_prices falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)

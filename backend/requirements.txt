@@ -45,6 +45,9 @@ anthropic==0.26.0
 # Pagos
 stripe==9.9.0
 
+# Emails transaccionales
+resend==2.3.0
+
 # Utilidades
 python-dateutil==2.9.0
 pytz==2024.1

@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # ── Stripe ──
     stripe_secret_key: str = ""
 
+    # ── Resend (emails transaccionales) ──
+    resend_api_key: str = ""
+    resend_from_email: str = "Compa <noreply@compa.com.ve>"
+
     # ── CORS — orígenes permitidos (separados por coma en producción) ──
     allowed_origins: str = "http://localhost:3000"
 

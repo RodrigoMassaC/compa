@@ -1,25 +1,35 @@
 """
 Autenticación y gestión de cuenta — Compa API
 =============================================
-POST /api/v1/auth/register  → crear cuenta nueva
-POST /api/v1/auth/login     → obtener JWT
-GET  /api/v1/auth/me        → perfil del usuario autenticado
+POST /api/v1/auth/register        → crear cuenta nueva
+POST /api/v1/auth/login           → obtener JWT
+GET  /api/v1/auth/me              → perfil del usuario autenticado
+PUT  /api/v1/auth/me              → actualizar perfil
+POST /api/v1/auth/forgot-password → solicitar reset por email (Resend)
+POST /api/v1/auth/reset-password  → confirmar reset con token
 """
 import uuid
+import secrets
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+import redis.asyncio as aioredis
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.exceptions import UnauthorizedError, ValidationError
+from app.core.exceptions import UnauthorizedError, ValidationError, NotFoundError
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.api.dependencies import get_current_user
 from app.schemas.user_schema import TokenResponse, UserCreate, UserLogin, UserResponse, UserUpdate
 
 router = APIRouter()
+
+RESET_TOKEN_TTL = 3600  # 1 hora
+RESET_PREFIX = "pwd_reset:"
 logger = logging.getLogger(__name__)
 
 
@@ -232,3 +242,116 @@ async def update_me(
     row = result.mappings().first()
     logger.info("update_me | id=%s campos=%s", current_user["id_usuario"], list(updates.keys()))
     return _row_to_user_response(dict(row))
+
+
+# ── POST /forgot-password ─────────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+@router.post("/forgot-password", status_code=200)
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Genera un token de reset y envía el email via Resend.
+    Siempre retorna 200 para no revelar si el email existe.
+    """
+    # Buscar usuario
+    result = await db.execute(
+        text("SELECT id_usuario::text, nombre_completo FROM usuarios WHERE email = :email LIMIT 1"),
+        {"email": body.email},
+    )
+    row = result.mappings().first()
+    if not row:
+        return {"message": "Si el email existe, recibirás un enlace de recuperación."}
+
+    # Generar token seguro y guardarlo en Redis con TTL 1h
+    token = secrets.token_urlsafe(32)
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    await redis.setex(f"{RESET_PREFIX}{token}", RESET_TOKEN_TTL, row["id_usuario"])
+    await redis.aclose()
+
+    # Enviar email via Resend
+    reset_url = f"http://localhost:3000/auth/reset-password?token={token}"
+    if settings.env == "production":
+        reset_url = f"https://app.compa.com.ve/auth/reset-password?token={token}"
+
+    await _send_reset_email(body.email, row["nombre_completo"], reset_url)
+    logger.info("forgot_password | email=%s token generado", body.email)
+    return {"message": "Si el email existe, recibirás un enlace de recuperación."}
+
+
+async def _send_reset_email(email: str, nombre: str, reset_url: str) -> None:
+    """Envía el email de recuperación via Resend."""
+    if not settings.resend_api_key:
+        logger.warning("_send_reset_email: RESEND_API_KEY no configurado — email no enviado")
+        logger.info("_send_reset_email: URL de reset (dev): %s", reset_url)
+        return
+
+    import httpx
+    html = f"""
+    <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color: #34a87a;">Compa — Recuperar contraseña</h2>
+      <p>Hola {nombre},</p>
+      <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta.</p>
+      <p>
+        <a href="{reset_url}"
+           style="background:#6abf9a;color:white;padding:12px 24px;border-radius:24px;
+                  text-decoration:none;font-weight:bold;display:inline-block;margin:16px 0;">
+          Restablecer contraseña
+        </a>
+      </p>
+      <p style="color:#888;font-size:13px;">
+        Este enlace expira en 1 hora. Si no solicitaste esto, ignora este mensaje.
+      </p>
+      <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+      <p style="color:#aaa;font-size:12px;">Compa · Tu Asistente de Ahorro en Venezuela</p>
+    </div>
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}", "Content-Type": "application/json"},
+                json={"from": settings.resend_from_email, "to": [email], "subject": "Recuperar contraseña — Compa", "html": html},
+            )
+            if resp.status_code not in (200, 201):
+                logger.error("_send_reset_email: Resend error %s %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.error("_send_reset_email: excepción: %s", exc)
+
+
+# ── POST /reset-password ──────────────────────────────────────────────────────
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+@router.post("/reset-password", status_code=200)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Valida el token de Redis y actualiza la contraseña del usuario.
+    """
+    if len(body.new_password) < 8:
+        raise ValidationError("La contraseña debe tener al menos 8 caracteres")
+
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    user_id = await redis.get(f"{RESET_PREFIX}{body.token}")
+
+    if not user_id:
+        await redis.aclose()
+        raise ValidationError("El enlace de recuperación no es válido o ya expiró")
+
+    # Actualizar contraseña
+    new_hash = get_password_hash(body.new_password)
+    await db.execute(
+        text("UPDATE usuarios SET password_hash = :hash WHERE id_usuario = CAST(:id AS uuid)"),
+        {"hash": new_hash, "id": user_id},
+    )
+    await db.commit()
+
+    # Invalidar token inmediatamente
+    await redis.delete(f"{RESET_PREFIX}{body.token}")
+    await redis.aclose()
+
+    logger.info("reset_password | user_id=%s contraseña actualizada", user_id)
+    return {"message": "Contraseña actualizada correctamente"}
