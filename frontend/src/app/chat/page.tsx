@@ -553,13 +553,9 @@ export default function ChatPage() {
               </div>
             </div>
             {currentUser ? (
-              <button
-                onClick={() => { clearAuth(); setCurrentUser(null); }}
-                title="Cerrar sesión"
-                className="text-slate-400 hover:text-red-400 transition-colors"
-              >
-                <SettingsIcon className="w-5 h-5" />
-              </button>
+              <Link href="/perfil" title="Ver perfil">
+                <SettingsIcon className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+              </Link>
             ) : (
               <Link href="/auth?mode=register">
                 <SettingsIcon className="w-5 h-5 text-slate-400 hover:text-slate-600" />
