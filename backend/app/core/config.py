@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # ── Meta / WhatsApp ──
     meta_whatsapp_token: str = ""
     meta_phone_number_id: str = ""
+    meta_waba_id: str = ""
     meta_verify_token: str = ""
 
     # ── Stripe ──
