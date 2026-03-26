@@ -24,9 +24,20 @@ logger = logging.getLogger(__name__)
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
 
-# Límites por ventana de 60 segundos
+# Límites por ventana de 60 segundos (anti-abuso)
 _RATE_ANON  = 15   # peticiones/min para usuarios anónimos (por IP)
 _RATE_AUTH  = 40   # peticiones/min para usuarios autenticados (por user_id)
+
+# Límites mensuales por plan (consultas al agente IA)
+_MONTHLY_LIMITS: dict[str, int] = {
+    "ANON":        10,   # sin cuenta
+    "FREE":        20,   # plan gratuito
+    "BASIC":      100,
+    "PRO":        500,
+    "ENTERPRISE": 9999,  # ilimitado práctico
+    "B2B_EMPRESA": 9999,
+    "ADMIN":      9999,
+}
 
 
 async def _get_redis() -> Optional[aioredis.Redis]:
@@ -37,6 +48,58 @@ async def _get_redis() -> Optional[aioredis.Redis]:
         return r
     except Exception:
         return None
+
+
+async def check_monthly_limit(
+    identifier: str,
+    plan: str = "FREE",
+) -> dict:
+    """
+    Verifica y registra el consumo mensual de consultas al agente.
+
+    identifier : user_id (web) o phone (WhatsApp)
+    plan       : FREE | BASIC | PRO | ENTERPRISE | B2B_EMPRESA | ADMIN | ANON
+
+    Retorna {"count": N, "limit": L, "remaining": R}
+    Lanza HTTPException 429 si se superó el límite.
+    """
+    from datetime import date
+    from fastapi import HTTPException
+
+    limit = _MONTHLY_LIMITS.get(plan, _MONTHLY_LIMITS["FREE"])
+    mes   = date.today().strftime("%Y-%m")
+    key   = f"rl:monthly:{identifier}:{mes}"
+
+    redis = await _get_redis()
+    if not redis:
+        return {"count": 0, "limit": limit, "remaining": limit}  # fail-open
+
+    try:
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 35 * 86400)  # 35 días, cubre fin de mes
+
+        await redis.aclose()
+
+        remaining = max(0, limit - count)
+
+        if count > limit:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Alcanzaste el límite de {limit} consultas este mes. "
+                    f"{'Actualiza tu plan en compa.com.ve para continuar.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
+                ),
+                headers={"X-RateLimit-Limit": str(limit), "X-RateLimit-Remaining": "0"},
+            )
+
+        return {"count": count, "limit": limit, "remaining": remaining}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("monthly_limit: Redis error — %s", exc)
+        return {"count": 0, "limit": limit, "remaining": limit}  # fail-open
 
 
 async def check_rate_limit(

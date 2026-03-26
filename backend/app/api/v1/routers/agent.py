@@ -6,7 +6,7 @@ POST /api/v1/agent/chat
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -14,7 +14,7 @@ from anthropic import Anthropic
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.event_logger import log_consulta
-from app.api.dependencies import get_optional_user, check_rate_limit
+from app.api.dependencies import get_optional_user, check_rate_limit, check_monthly_limit
 import json
 
 logger = logging.getLogger(__name__)
@@ -476,12 +476,23 @@ REGLAS:
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: Optional[dict] = Depends(get_optional_user),
     _: None = Depends(check_rate_limit),
 ):
     if not request.mensaje.strip():
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+
+    # ── Límite mensual por plan ────────────────────────────────────────────────
+    if current_user:
+        identifier = current_user["id_usuario"]
+        plan = current_user.get("rol_usuario") if current_user.get("rol_usuario") in ("B2B_EMPRESA", "ADMIN") else current_user.get("plan", "FREE")
+    else:
+        identifier = f"ip:{http_request.client.host if http_request.client else 'unknown'}"
+        plan = "ANON"
+    await check_monthly_limit(identifier, plan)
+    # ─────────────────────────────────────────────────────────────────────────
 
     client = Anthropic(api_key=settings.anthropic_api_key)
 

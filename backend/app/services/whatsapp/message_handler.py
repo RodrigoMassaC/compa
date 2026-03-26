@@ -394,6 +394,24 @@ def _format_for_whatsapp(data: dict) -> str:
 
 # ── Punto de entrada ───────────────────────────────────────────────────────────
 
+_MONTHLY_LIMITS_WA = {"FREE": 20, "BASIC": 100, "PRO": 500, "ANON": 10, "B2B_EMPRESA": 9999, "ADMIN": 9999}
+
+
+async def _verificar_limite_mensual(redis: aioredis.Redis, identifier: str, plan: str) -> bool:
+    """Retorna True si puede consultar, False si alcanzó el límite mensual."""
+    from datetime import date
+    limit = _MONTHLY_LIMITS_WA.get(plan, 20)
+    key   = f"rl:monthly:{identifier}:{date.today().strftime('%Y-%m')}"
+    try:
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, 35 * 86400)
+        return count <= limit
+    except Exception as exc:
+        logger.warning("WA monthly_limit error: %s", exc)
+        return True  # fail-open
+
+
 async def handle_incoming_message(phone: str, mensaje: str) -> None:
     """
     Punto de entrada para un mensaje entrante de WhatsApp.
@@ -407,7 +425,21 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
         usuario = await _get_usuario_by_phone(phone)
 
         if usuario:
-            # ── Usuario registrado → agente personalizado ─────────────────────
+            # ── Verificar límite mensual ───────────────────────────────────────
+            plan = usuario.get("plan", "FREE")
+            if not await _verificar_limite_mensual(redis, usuario["id"], plan):
+                from datetime import date
+                from calendar import monthrange
+                hoy = date.today()
+                dias_restantes = monthrange(hoy.year, hoy.month)[1] - hoy.day
+                await send_text_message(phone, (
+                    f"⚠️ Alcanzaste el límite de consultas de este mes.\n\n"
+                    f"El contador se reinicia en {dias_restantes} días.\n"
+                    f"Para consultas ilimitadas, mejora tu plan en *compa.com.ve* 🚀"
+                ))
+                return
+
+            # ── Agente personalizado ──────────────────────────────────────────
             historial = await _get_historial(redis, phone)
             data = await _call_agent(mensaje, historial, nombre_usuario=usuario["nombre"])
             respuesta = _format_for_whatsapp(data)
@@ -421,7 +453,6 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
             respuesta_registro = await _manejar_registro(redis, phone, mensaje)
 
             if respuesta_registro is None:
-                # sin_cuenta o completado → agente sin personalización
                 historial = await _get_historial(redis, phone)
                 data = await _call_agent(mensaje, historial)
                 respuesta = _format_for_whatsapp(data)
