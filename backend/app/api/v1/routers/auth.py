@@ -244,6 +244,44 @@ async def update_me(
     return _row_to_user_response(dict(row))
 
 
+# ── POST /change-password ─────────────────────────────────────────────────────
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@router.post("/change-password", status_code=200)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cambia la contraseña del usuario autenticado.
+    Requiere la contraseña actual para verificación.
+    """
+    if len(body.new_password) < 8:
+        raise ValidationError("La nueva contraseña debe tener al menos 8 caracteres")
+
+    # Verificar contraseña actual
+    result = await db.execute(
+        text("SELECT password_hash FROM usuarios WHERE id_usuario = CAST(:id AS uuid) LIMIT 1"),
+        {"id": current_user["id_usuario"]},
+    )
+    row = result.mappings().first()
+    if not row or not verify_password(body.current_password, row["password_hash"]):
+        raise UnauthorizedError("La contraseña actual es incorrecta")
+
+    new_hash = get_password_hash(body.new_password)
+    await db.execute(
+        text("UPDATE usuarios SET password_hash = :hash WHERE id_usuario = CAST(:id AS uuid)"),
+        {"hash": new_hash, "id": current_user["id_usuario"]},
+    )
+    await db.commit()
+    logger.info("change_password | id=%s", current_user["id_usuario"])
+    return {"message": "Contraseña actualizada correctamente"}
+
+
 # ── POST /forgot-password ─────────────────────────────────────────────────────
 
 class ForgotPasswordRequest(BaseModel):

@@ -7,6 +7,15 @@ import { saveAuth, type AuthUser } from "@/lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+// ── Normaliza teléfono venezolano al formato internacional 58XXXXXXXXXX ───────
+function normalizarTelefono(raw: string): string {
+  const digits = raw.replace(/[\s\-\(\)\.\+]/g, ""); // quitar espacios y símbolos
+  if (!digits) return digits;
+  if (digits.startsWith("58")) return digits;          // ya tiene código país
+  if (digits.startsWith("0"))  return "58" + digits.slice(1); // 0412… → 58412…
+  return "58" + digits;                                // 412… → 58412…
+}
+
 // ── Estados venezolanos ───────────────────────────────────────────────────────
 const ESTADOS_VEN = [
   "Amazonas","Anzoátegui","Apure","Aragua","Barinas","Bolívar","Carabobo",
@@ -61,7 +70,7 @@ function AuthForm() {
               estado_ven:      estadoVen || undefined,
               sexo:            sexo     || undefined,
               fecha_nacimiento: fechaNac || undefined,
-              telefono_wa:     telefonoWa ? telefonoWa.replace(/^0/, "58") : undefined,
+              telefono_wa:     telefonoWa ? normalizarTelefono(telefonoWa) : undefined,
             };
 
       const res = await fetch(`${API}${endpoint}`, {
