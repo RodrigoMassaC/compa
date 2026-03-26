@@ -2,6 +2,10 @@
 
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { getUser } from "@/lib/auth";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 import {
     LayoutDashboard,
     TrendingUp,
@@ -56,19 +60,26 @@ interface Product {
 }
 
 export default function Dashboard() {
+    const router = useRouter();
     const [searchQuery, setSearchQuery] = useState("");
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
+
+    // Guard: solo B2B_EMPRESA y ADMIN pueden acceder
+    useEffect(() => {
+        const user = getUser();
+        if (!user) { router.replace("/auth"); return; }
+        if (user.rol_usuario !== "B2B_EMPRESA" && user.rol_usuario !== "ADMIN") {
+            router.replace("/chat");
+        }
+    }, [router]);
 
     // Fetch real data from backend
     useEffect(() => {
         const fetchProducts = async () => {
             try {
                 setLoading(true);
-                // Using "a" as the default search query based on requirements
-                const res = await fetch(
-                    "http://localhost:8000/api/v1/catalog/productos/buscar?q=ac"
-                );
+                const res = await fetch(`${API}/catalog/productos/buscar?q=ac`);
                 if (res.ok) {
                     const data = await res.json();
                     setProducts(data.resultados || []);
@@ -91,7 +102,7 @@ export default function Dashboard() {
             <aside className="w-64 bg-white border-r border-gray-200 flex flex-col justify-between hidden md:flex shrink-0">
                 <div>
                     <div className="h-16 flex items-center px-6 border-b border-gray-200">
-                        <span className="text-xl font-bold text-blue-600 mr-2">Compa</span>
+                        <span className="text-xl font-bold text-[#3C5ACB] mr-2">Compa</span>
                         <span className="text-sm text-gray-500 font-medium">
                             Market Intelligence
                         </span>
@@ -99,7 +110,7 @@ export default function Dashboard() {
                     <nav className="p-4 space-y-1">
                         <a
                             href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 rounded-lg"
+                            className="flex items-center px-3 py-2 text-sm font-medium bg-[#EEF1FD] text-[#3C5ACB] rounded-lg"
                         >
                             <LayoutDashboard className="w-5 h-5 mr-3" />
                             Resumen
@@ -180,7 +191,7 @@ export default function Dashboard() {
                                 <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
                             </button>
                             <button className="p-1 border-2 border-transparent hover:border-gray-200 rounded-full transition-all">
-                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-[#3C5ACB]">
                                     <User className="w-4 h-4" />
                                 </div>
                             </button>
@@ -368,7 +379,7 @@ export default function Dashboard() {
                                         <Filter className="w-4 h-4 mr-2" />
                                         Filtros
                                     </button>
-                                    <button className="flex items-center px-3 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
+                                    <button className="flex items-center px-3 py-2 text-sm font-medium text-white bg-[#3C5ACB] border border-transparent rounded-lg hover:bg-[#2F47A8] transition-colors shadow-sm">
                                         <Download className="w-4 h-4 mr-2" />
                                         Exportar CSV
                                     </button>
@@ -479,7 +490,7 @@ export default function Dashboard() {
                                                         </span>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                        <button className="text-blue-600 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-md transition-colors">
+                                                        <button className="text-[#3C5ACB] hover:text-blue-900 bg-[#EEF1FD] hover:bg-blue-100 px-3 py-1 rounded-md transition-colors">
                                                             Ver detalles
                                                         </button>
                                                     </td>

@@ -61,7 +61,7 @@ function AuthForm() {
               estado_ven:      estadoVen || undefined,
               sexo:            sexo     || undefined,
               fecha_nacimiento: fechaNac || undefined,
-              telefono_wa:     telefonoWa || undefined,
+              telefono_wa:     telefonoWa ? telefonoWa.replace(/^0/, "58") : undefined,
             };
 
       const res = await fetch(`${API}${endpoint}`, {
@@ -167,6 +167,26 @@ function AuthForm() {
             />
           </div>
 
+          {/* WhatsApp obligatorio (solo registro) */}
+          {tab === "register" && (
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1.5">
+                Número de WhatsApp <span className="text-[#3C5ACB]">*</span>
+              </label>
+              <input
+                type="tel"
+                required
+                value={telefonoWa}
+                onChange={(e) => setTelefonoWa(e.target.value)}
+                placeholder="Ej: 04121234567"
+                className="w-full border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Necesario para usar Compa por WhatsApp y recuperar tu cuenta
+              </p>
+            </div>
+          )}
+
           {/* Campos opcionales (solo registro) */}
           {tab === "register" && (
             <div>
@@ -234,22 +254,6 @@ function AuthForm() {
                     </div>
                   </div>
 
-                  {/* WhatsApp */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1.5">
-                      Número de WhatsApp
-                    </label>
-                    <input
-                      type="tel"
-                      value={telefonoWa}
-                      onChange={(e) => setTelefonoWa(e.target.value)}
-                      placeholder="Ej: 04121234567"
-                      className="w-full border border-[#e5e7eb] rounded-xl px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-[#3C5ACB] transition-colors placeholder:text-slate-400"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Para usar Compa desde WhatsApp cuando esté disponible
-                    </p>
-                  </div>
                 </div>
               )}
             </div>
