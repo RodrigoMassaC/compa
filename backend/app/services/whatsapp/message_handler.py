@@ -58,24 +58,29 @@ async def _save_historial(redis: aioredis.Redis, phone: str, historial: list[dic
 
 
 async def _get_usuario_by_phone(phone: str) -> dict | None:
-    """Busca usuario en DB por telefono_wa. Retorna dict con id/nombre/email o None."""
+    """Busca usuario en DB por telefono_wa. Retorna dict con id/nombre/email/ciudad/plan o None."""
     from app.core.database import AsyncSessionLocal
     from sqlalchemy import text
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             text(
-                "SELECT id_usuario, nombre_completo, email "
-                "FROM usuarios WHERE telefono_wa = :phone LIMIT 1"
+                "SELECT u.id_usuario, u.nombre_completo, u.email, u.ciudad, "
+                "COALESCE(pm.codigo_plan, 'FREE') AS plan "
+                "FROM usuarios u "
+                "LEFT JOIN planes_membresia pm ON pm.id_plan = u.id_plan_actual "
+                "WHERE u.telefono_wa = :phone LIMIT 1"
             ),
             {"phone": phone},
         )
         row = result.fetchone()
         if row:
             return {
-                "id": str(row.id_usuario),
+                "id":     str(row.id_usuario),
                 "nombre": row.nombre_completo or "",
-                "email": row.email or "",
+                "email":  row.email or "",
+                "ciudad": row.ciudad or "",
+                "plan":   row.plan or "FREE",
             }
     return None
 
@@ -248,11 +253,30 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
             "_Responde con el número_"
         )
 
-    # ── Género → crear cuenta ─────────────────────────────────────────────────
+    # ── Género → pasar a T&C ──────────────────────────────────────────────────
     if paso == "sexo":
         if msg not in ("1", "2", "3"):
             return "Responde solo con 1, 2 ó 3."
         estado["sexo"] = msg
+        estado["paso"] = "terminos"
+        await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
+        return (
+            "Casi listo 🎉 Solo falta aceptar nuestra Política de Privacidad:\n\n"
+            "🔒 Tus datos son confidenciales y no se comparten con terceros\n"
+            "📋 Los usamos solo para mejorar el servicio\n"
+            "✏️ Puedes pedir acceso, corrección o eliminación de tus datos\n\n"
+            "Lee los términos completos en: *compa.com.ve/terminos*\n\n"
+            "¿Aceptas? Responde *SÍ* para crear tu cuenta o *NO* para cancelar."
+        )
+
+    # ── T&C → crear cuenta ────────────────────────────────────────────────────
+    if paso == "terminos":
+        if msg.upper() not in ("SI", "SÍ", "S", "YES", "1", "ACEPTO", "OK", "CLARO"):
+            await redis.delete(key)
+            return (
+                "Entendido. No se creó ninguna cuenta.\n\n"
+                "Si cambias de opinión, escríbeme cuando quieras y empezamos de nuevo. 😊"
+            )
         estado["phone"] = phone
 
         try:
@@ -292,7 +316,7 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
 
 # ── Agente IA ──────────────────────────────────────────────────────────────────
 
-async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str = "") -> dict:
+async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str = "", ciudad_usuario: str = "") -> dict:
     """Llama al agente IA de Compa con contexto del usuario."""
     from app.api.v1.routers.agent import (
         buscar_en_db,
@@ -353,11 +377,13 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
         mensajes_api = [
             {"role": m.get("role", "user"), "content": m.get("content", "")} for m in historial_reciente
         ]
-        ctx_usuario = f"El usuario se llama {nombre_usuario}. " if nombre_usuario else ""
+        ctx_nombre = f"El usuario se llama {nombre_usuario}. " if nombre_usuario else ""
+        ctx_ciudad = f"Está en {ciudad_usuario}, Venezuela. " if ciudad_usuario else ""
         mensajes_api.append({
             "role": "user",
             "content": (
-                f"{ctx_usuario}El usuario preguntó: \"{mensaje}\"\n\n"
+                f"{ctx_ciudad}{ctx_nombre}"
+                f"El usuario preguntó: \"{mensaje}\"\n\n"
                 f"Términos buscados: {', '.join(terminos)}\n\n"
                 f"Resultados:\n{resultados_str}\n\n"
                 f"Responde de forma útil y directa."
@@ -441,7 +467,7 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
 
             # ── Agente personalizado ──────────────────────────────────────────
             historial = await _get_historial(redis, phone)
-            data = await _call_agent(mensaje, historial, nombre_usuario=usuario["nombre"])
+            data = await _call_agent(mensaje, historial, nombre_usuario=usuario["nombre"], ciudad_usuario=usuario.get("ciudad", ""))
             respuesta = _format_for_whatsapp(data)
             historial.append({"role": "user",      "content": mensaje})
             historial.append({"role": "assistant", "content": data.get("respuesta", respuesta)})

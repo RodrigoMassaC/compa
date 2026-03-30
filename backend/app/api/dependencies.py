@@ -8,6 +8,7 @@ check_rate_limit  → limita llamadas al agente por IP/usuario vía Redis
 import logging
 from typing import Optional
 
+import httpx
 import redis.asyncio as aioredis
 from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
@@ -48,6 +49,55 @@ async def _get_redis() -> Optional[aioredis.Redis]:
         return r
     except Exception:
         return None
+
+
+async def get_city_from_ip(ip: str) -> str:
+    """
+    Retorna la ciudad aproximada de una IP usando ip-api.com (gratis, sin key).
+    Cachea el resultado en Redis por 24h para no repetir llamadas.
+    Retorna string vacío si falla o si la IP es local.
+    """
+    if not ip or ip in ("127.0.0.1", "::1", "unknown"):
+        return ""
+
+    # Intentar desde cache Redis
+    redis = await _get_redis()
+    cache_key = f"geo:ip:{ip}"
+    if redis:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                await redis.aclose()
+                return cached
+        except Exception:
+            pass
+
+    # Llamar a ip-api.com
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                f"http://ip-api.com/json/{ip}",
+                params={"fields": "status,city,regionName", "lang": "es"},
+            )
+            data = resp.json()
+            if data.get("status") == "success":
+                city = data.get("city", "")
+                if redis and city:
+                    try:
+                        await redis.setex(cache_key, 86400, city)  # 24h
+                    except Exception:
+                        pass
+                return city
+    except Exception as exc:
+        logger.debug("get_city_from_ip | error: %s", exc)
+    finally:
+        if redis:
+            try:
+                await redis.aclose()
+            except Exception:
+                pass
+
+    return ""
 
 
 async def check_monthly_limit(

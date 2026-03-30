@@ -41,3 +41,6 @@ CREATE TRIGGER trg_items_update_lista
     FOR EACH ROW EXECUTE FUNCTION update_lista_timestamp();
 
 RAISE NOTICE '✅ Migración 002 aplicada: listas_compras + items_lista';
+
+-- 003: términos y condiciones
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS terminos_aceptados_en TIMESTAMPTZ;

@@ -44,6 +44,8 @@ function AuthForm() {
   const [fechaNac,       setFechaNac]       = useState("");
   const [telefonoWa,     setTelefonoWa]     = useState("");
   const [showOptional,   setShowOptional]   = useState(false);
+  const [aceptaTerminos, setAceptaTerminos] = useState(false);
+  const [showTerminos,   setShowTerminos]   = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -55,6 +57,10 @@ function AuthForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (tab === "register" && !aceptaTerminos) {
+      setError("Debes aceptar la Política de Privacidad para registrarte.");
+      return;
+    }
     setLoading(true);
 
     try {
@@ -275,10 +281,34 @@ function AuthForm() {
             </div>
           )}
 
+          {/* Checkbox T&C (solo registro) */}
+          {tab === "register" && (
+            <div className="flex items-start gap-3 mt-1">
+              <input
+                type="checkbox"
+                id="terminos"
+                checked={aceptaTerminos}
+                onChange={e => setAceptaTerminos(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-[#3C5ACB] cursor-pointer flex-shrink-0"
+              />
+              <label htmlFor="terminos" className="text-xs text-slate-500 leading-relaxed cursor-pointer">
+                He leído y acepto la{" "}
+                <button
+                  type="button"
+                  onClick={() => setShowTerminos(true)}
+                  className="text-[#3C5ACB] font-bold hover:underline"
+                >
+                  Política de Privacidad y Protección de Datos
+                </button>{" "}
+                de Compa, conforme a la Ley Orgánica de Protección de Datos Personales de Venezuela.
+              </label>
+            </div>
+          )}
+
           {/* Submit */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || (tab === "register" && !aceptaTerminos)}
             className="w-full bg-[#3C5ACB] hover:bg-[#2F47A8] disabled:opacity-60 text-white font-bold py-3.5 rounded-full transition-colors text-sm mt-2"
           >
             {loading
@@ -311,6 +341,49 @@ function AuthForm() {
       <Link href="/" className="mt-6 text-xs text-slate-400 hover:text-slate-600 font-medium">
         ← Volver al inicio
       </Link>
+
+      {/* Modal Política de Privacidad */}
+      {showTerminos && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowTerminos(false)}>
+          <div className="bg-white rounded-3xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-8" onClick={e => e.stopPropagation()}>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-1">Política de Privacidad</h2>
+            <p className="text-xs text-slate-400 mb-5">Compa — Venezuela</p>
+            <div className="text-sm text-slate-600 space-y-4 leading-relaxed">
+              <p>En <strong>Compa</strong>, reafirmamos nuestro compromiso con la privacidad y la seguridad de la información de nuestros usuarios, en cumplimiento con la Ley Orgánica de Protección de Datos Personales de Venezuela.</p>
+              <div>
+                <p className="font-bold text-slate-800 mb-1">1. No difusión de datos</p>
+                <p>Tus datos personales son tratados con estricta confidencialidad. No serán difundidos, comercializados ni compartidos con terceros sin tu consentimiento expreso, salvo los casos autorizados por ley.</p>
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 mb-1">2. Finalidad del tratamiento</p>
+                <p>Recolectamos tus datos únicamente para el funcionamiento óptimo de la aplicación, la mejora continua de nuestros servicios y la atención de tus requerimientos.</p>
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 mb-1">3. Medidas de seguridad</p>
+                <p>Implementamos medidas técnicas y organizativas para salvaguardar la integridad y confidencialidad de tus datos frente a accesos no autorizados.</p>
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 mb-1">4. Derechos ARCO</p>
+                <p>Puedes ejercer tus derechos de acceso, rectificación, actualización, cancelación y oposición escribiendo a <a href="mailto:privacidad@compa.com.ve" className="text-[#3C5ACB] font-medium">privacidad@compa.com.ve</a>.</p>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => { setAceptaTerminos(true); setShowTerminos(false); }}
+                className="flex-1 bg-[#3C5ACB] hover:bg-[#2F47A8] text-white font-bold text-sm py-2.5 rounded-full transition-colors"
+              >
+                Acepto
+              </button>
+              <button
+                onClick={() => setShowTerminos(false)}
+                className="flex-1 border border-slate-200 text-slate-600 font-bold text-sm py-2.5 rounded-full hover:bg-slate-50 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

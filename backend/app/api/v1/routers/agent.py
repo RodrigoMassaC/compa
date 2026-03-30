@@ -494,6 +494,16 @@ async def chat(
     await check_monthly_limit(identifier, plan)
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Determinar ciudad del usuario ─────────────────────────────────────────
+    from app.api.dependencies import get_city_from_ip
+    ciudad_usuario = ""
+    if current_user:
+        ciudad_usuario = current_user.get("ciudad") or ""
+    if not ciudad_usuario:
+        ip = http_request.client.host if http_request.client else ""
+        ciudad_usuario = await get_city_from_ip(ip)
+    # ─────────────────────────────────────────────────────────────────────────
+
     client = Anthropic(api_key=settings.anthropic_api_key)
 
     # --- Construir historial para clasificación (últimos 6 mensajes para contexto) ---
@@ -575,9 +585,13 @@ async def chat(
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
             })
+        ctx_ciudad = f"El usuario está en {ciudad_usuario}, Venezuela. " if ciudad_usuario else ""
+        nombre_usuario = current_user.get("nombre_completo", "").split()[0] if current_user else ""
+        ctx_nombre = f"Se llama {nombre_usuario}. " if nombre_usuario else ""
         mensajes_respuesta.append({
             "role": "user",
             "content": (
+                f"{ctx_ciudad}{ctx_nombre}"
                 f"El usuario preguntó: \"{request.mensaje}\"\n\n"
                 f"Términos buscados: {', '.join(terminos)}\n\n"
                 f"Resultados encontrados en la base de datos:\n{resultados_str}\n\n"

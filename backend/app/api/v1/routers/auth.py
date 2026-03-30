@@ -98,11 +98,13 @@ async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
             INSERT INTO usuarios (
                 id_usuario, email, password_hash, nombre_completo,
                 telefono_wa, fecha_nacimiento, sexo, ciudad, estado_ven,
-                rol_usuario, id_plan_actual, estado_suscripcion
+                rol_usuario, id_plan_actual, estado_suscripcion,
+                terminos_aceptados_en
             ) VALUES (
                 CAST(:id AS uuid), :email, :password_hash, :nombre,
                 :telefono_wa, :fecha_nacimiento, :sexo, :ciudad, :estado_ven,
-                'CONSUMIDOR', CAST(:plan_id AS uuid), 'ACTIVA'
+                'CONSUMIDOR', CAST(:plan_id AS uuid), 'ACTIVA',
+                NOW()
             )
         """),
         {
