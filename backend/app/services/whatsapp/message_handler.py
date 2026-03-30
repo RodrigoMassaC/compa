@@ -129,14 +129,19 @@ async def _crear_usuario_whatsapp(datos: dict) -> str:
         )
         plan_id = plan_result.scalar()
 
+        from datetime import date as _date
+        fecha_nac_obj = _date.fromisoformat(fecha_nac)  # evita cast ::date con asyncpg
+
         await db.execute(
             text("""
                 INSERT INTO usuarios
                   (id_usuario, email, password_hash, nombre_completo,
-                   telefono_wa, ciudad, fecha_nacimiento, sexo, id_plan_actual, rol_usuario)
+                   telefono_wa, ciudad, fecha_nacimiento, sexo, id_plan_actual, rol_usuario,
+                   terminos_aceptados_en)
                 VALUES
                   (:id, :email, :pw_hash, :nombre,
-                   :telefono, :ciudad, :fecha_nac::date, :sexo, :plan_id, 'CONSUMIDOR')
+                   :telefono, :ciudad, :fecha_nac, :sexo, :plan_id, 'CONSUMIDOR',
+                   NOW())
             """),
             {
                 "id":       str(uuid.uuid4()),
@@ -145,7 +150,7 @@ async def _crear_usuario_whatsapp(datos: dict) -> str:
                 "nombre":   datos["nombre"],
                 "telefono": datos["phone"],
                 "ciudad":   datos.get("ciudad", ""),
-                "fecha_nac": fecha_nac,
+                "fecha_nac": fecha_nac_obj,
                 "sexo":     sexo,
                 "plan_id":  str(plan_id) if plan_id else None,
             },
