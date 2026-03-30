@@ -353,6 +353,7 @@ export default function ChatPage() {
   const [historial, setHistorial] = useState<Conversacion[]>([]);
   const [convId, setConvId] = useState<string | null>(null);
   const [listaCompras, setListaCompras] = useState<string[]>([]);
+  const [showLimitModal, setShowLimitModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const addToLista = (nombre: string) => {
@@ -424,8 +425,14 @@ export default function ChatPage() {
         headers,
         body: JSON.stringify({ mensaje: userMsg.content, historial: historialAPI }),
       });
-      const data = await response.json();
       setIsTyping(false);
+
+      if (response.status === 429) {
+        setShowLimitModal(true);
+        return;
+      }
+
+      const data = await response.json();
 
       if (data?.respuesta) {
         setMessages((prev) => [
@@ -459,6 +466,35 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-[#F5F7FF] font-sans text-slate-800">
+
+      {/* Modal límite mensual */}
+      {showLimitModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center">
+            <div className="text-5xl mb-4">⚡</div>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-2">Límite mensual alcanzado</h2>
+            <p className="text-sm text-slate-500 mb-6">
+              Agotaste tus consultas de este mes. Puedes esperar al próximo mes o agregar más consultas a tu cuenta.
+            </p>
+            <div className="flex flex-col gap-3">
+              <Link
+                href="/consultas"
+                className="bg-[#3C5ACB] hover:bg-[#2F47A8] text-white font-bold py-3 px-6 rounded-full transition-colors"
+                onClick={() => setShowLimitModal(false)}
+              >
+                Ver opciones de consultas
+              </Link>
+              <button
+                onClick={() => setShowLimitModal(false)}
+                className="text-slate-500 hover:text-slate-700 font-medium text-sm py-2"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SIDEBAR */}
       <aside className="w-[280px] border-r border-[#ebecf0] bg-white hidden md:flex flex-col justify-between">
         <div className="p-6">

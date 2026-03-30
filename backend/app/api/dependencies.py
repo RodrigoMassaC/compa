@@ -125,25 +125,34 @@ async def check_monthly_limit(
         return {"count": 0, "limit": limit, "remaining": limit}  # fail-open
 
     try:
+        # Añadir bonus comprado (paquetes adicionales)
+        key_bonus = f"rl:monthly:bonus:{identifier}:{mes}"
+        bonus = int(await redis.get(key_bonus) or 0)
+        effective_limit = limit + bonus
+
         count = await redis.incr(key)
         if count == 1:
             await redis.expire(key, 35 * 86400)  # 35 días, cubre fin de mes
 
         await redis.aclose()
 
-        remaining = max(0, limit - count)
+        remaining = max(0, effective_limit - count)
 
-        if count > limit:
+        if count > effective_limit:
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"Alcanzaste el límite de {limit} consultas este mes. "
-                    f"{'Actualiza tu plan en compa.com.ve para continuar.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
+                    f"Alcanzaste el límite de {effective_limit} consultas este mes. "
+                    f"{'Puedes comprar más consultas en compa.com.ve/consultas.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
                 ),
-                headers={"X-RateLimit-Limit": str(limit), "X-RateLimit-Remaining": "0"},
+                headers={
+                    "X-RateLimit-Limit": str(effective_limit),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Plan": plan,
+                },
             )
 
-        return {"count": count, "limit": limit, "remaining": remaining}
+        return {"count": count, "limit": effective_limit, "remaining": remaining}
 
     except HTTPException:
         raise
