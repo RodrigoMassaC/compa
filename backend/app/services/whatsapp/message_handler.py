@@ -327,8 +327,10 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
         buscar_en_db,
         _prefiltro_substring,
         filtrar_relevantes,
+        calcular_carrito_optimo,
         CLASIFICACION_SYSTEM,
         RESPONSE_SYSTEM,
+        CART_SYSTEM,
     )
     from app.core.database import AsyncSessionLocal
 
@@ -404,6 +406,30 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
 
         return {"respuesta": respuesta_response.content[0].text.strip(), "productos": productos}
 
+    if accion == "lista":
+        items = clasificacion.get("items", [])
+        if len(items) < 2:
+            return {"respuesta": "Dime al menos 2 productos para calcular dónde te sale más barata la compra total. 🛒", "productos": []}
+
+        async with AsyncSessionLocal() as db:
+            carrito = await calcular_carrito_optimo(items, db, client)
+
+        ctx_nombre = f"El usuario se llama {nombre_usuario}. " if nombre_usuario else ""
+        ctx_ciudad = f"Está en {ciudad_usuario}, Venezuela. " if ciudad_usuario else ""
+        resumen = f"{ctx_ciudad}{ctx_nombre}Lista del usuario: {', '.join(items)}\n\n"
+        for t in carrito["tiendas"]:
+            resumen += f"- {t['tienda']}: ${t['total_usd']:.2f} ({t['items_encontrados']}/{carrito['total_items']} productos)\n"
+        if carrito.get("ahorro_maximo_usd"):
+            resumen += f"\nAhorro máximo posible: ${carrito['ahorro_maximo_usd']:.2f}"
+
+        respuesta_carrito = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=400,
+            system=CART_SYSTEM,
+            messages=[{"role": "user", "content": resumen}],
+        )
+        return {"respuesta": respuesta_carrito.content[0].text.strip(), "productos": []}
+
     return {"respuesta": clasificacion.get("respuesta", "¿En qué te puedo ayudar?"), "productos": []}
 
 
@@ -472,6 +498,19 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
 
             # ── Agente personalizado ──────────────────────────────────────────
             historial = await _get_historial(redis, phone)
+
+            # Saludo al inicio de conversación (historial vacío)
+            if not historial:
+                nombre = usuario["nombre"].split()[0] if usuario.get("nombre") else ""
+                saludo = f"¡Hola, {nombre}! 👋 " if nombre else "¡Hola! 👋 "
+                await send_text_message(phone, (
+                    f"{saludo}Soy *Compa* 🛒\n\n"
+                    f"¿Qué necesitas hoy?\n"
+                    f"• Escribe un *producto* para ver precios (ej: _leche, acetaminofén_)\n"
+                    f"• Escribe una *lista* para saber dónde te sale más barato (ej: _leche, arroz, jabón_)"
+                ))
+                return
+
             data = await _call_agent(mensaje, historial, nombre_usuario=usuario["nombre"], ciudad_usuario=usuario.get("ciudad", ""))
             respuesta = _format_for_whatsapp(data)
             historial.append({"role": "user",      "content": mensaje})
