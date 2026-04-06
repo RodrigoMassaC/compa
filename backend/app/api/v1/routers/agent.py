@@ -85,8 +85,10 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
             JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
             WHERE (
-                similarity(pm.nombre_estandar, :termino) > 0.35
-                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.35
+                similarity(pm.nombre_estandar, :termino) > 0.15
+                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.15
+                OR pm.nombre_estandar ILIKE :search
+                OR COALESCE(pm.terminos_busqueda, '') ILIKE :search
             )
             ORDER BY sim DESC, precio_usd ASC NULLS LAST
             LIMIT 20
@@ -451,11 +453,12 @@ REGLAS ESTRICTAS:
 2. NUNCA digas "los precios pueden variar según ubicación" como consejo genérico
 3. SIEMPRE muestra comparación entre tiendas cuando hay más de una opción
 4. Destaca cuál tienda tiene el precio más bajo
-5. Muestra precios en USD y Bs (bolívares)
+5. Muestra precios en USD y Bs (bolívares). La conversión a Bs usa la tasa oficial del BCV — NO digas "aprox" ni "aproximadamente", es la tasa oficial
 6. Sé directo y útil — máximo 3-4 líneas de texto
 7. Si hay múltiples marcas o presentaciones, menciónalas brevemente
 8. Si NO hay resultados relevantes, di claramente qué buscaste y pide más detalles del producto
-9. Tono: amigable pero profesional, en español venezolano natural (sin "hermano", sin emojis excesivos)"""
+9. Tono: amigable pero profesional, en español venezolano natural (sin "hermano", sin emojis excesivos)
+10. Después de mostrar resultados, ofrece brevemente: "¿Quieres ver más detalles o buscar otro producto?\""""
 
 
 CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. El usuario quiere saber dónde comprar su lista completa al menor costo.

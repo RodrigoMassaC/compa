@@ -312,8 +312,10 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
             f"📧 *Email:* {estado['email']}\n"
             f"🔑 *Contraseña temporal:* `{password_temp}`\n\n"
             f"⚠️ Por seguridad, entra a *compa.com.ve*, inicia sesión y cambia tu contraseña.\n\n"
-            f"---\n"
-            f"Ahora sí, ¿qué precio estás buscando? 🛒"
+            f"---\n\n"
+            f"Ya puedes usar Compa 🛒 Escríbeme:\n"
+            f"• Un *producto* para ver precios (ej: _acetaminofén, leche_)\n"
+            f"• Una *lista de compras* para saber dónde te sale más barato (ej: _leche, arroz, jabón_)"
         )
 
     return None
@@ -434,18 +436,27 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
 
 
 def _format_for_whatsapp(data: dict) -> str:
-    """Formatea la respuesta del agente como texto plano para WhatsApp."""
-    lines = [data.get("respuesta", ""), ""]
-    for i, prod in enumerate(data.get("productos", [])[:5]):
+    """Formatea la respuesta del agente como texto plano para WhatsApp con comparación entre tiendas."""
+    lines = [data.get("respuesta", "")]
+    productos = data.get("productos", [])[:5]
+    if productos:
+        lines.append("")
+    for i, prod in enumerate(productos):
         ofertas = prod.get("ofertas", [])
         if not ofertas:
             continue
-        mejor = ofertas[0]
         nombre = f"{prod.get('nombre', '')} {prod.get('presentacion', '')}".strip()
-        precio = f"${mejor.get('precio_usd', 0):.2f}"
-        tienda = mejor.get("tienda", "")
+        marca = prod.get("marca", "")
+        header = f"*{nombre}*" + (f" ({marca})" if marca else "")
         prefix = "🏆" if i == 0 else f"{i + 1}."
-        lines.append(f"{prefix} *{nombre}* — {precio} en {tienda}")
+        lines.append(f"{prefix} {header}")
+        for oferta in ofertas[:4]:
+            precio_usd = oferta.get("precio_usd", 0)
+            precio_ves = oferta.get("precio_ves", 0)
+            tienda = oferta.get("tienda", "")
+            ves_str = f" / {precio_ves:,.0f} Bs" if precio_ves else ""
+            lines.append(f"  • {tienda}: ${precio_usd:.2f}{ves_str}")
+        lines.append("")
     return "\n".join(lines).strip()
 
 
@@ -498,21 +509,16 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
 
             # ── Agente personalizado ──────────────────────────────────────────
             historial = await _get_historial(redis, phone)
-
-            # Saludo al inicio de conversación (historial vacío)
-            if not historial:
-                nombre = usuario["nombre"].split()[0] if usuario.get("nombre") else ""
-                saludo = f"¡Hola, {nombre}! 👋 " if nombre else "¡Hola! 👋 "
-                await send_text_message(phone, (
-                    f"{saludo}Soy *Compa* 🛒\n\n"
-                    f"¿Qué necesitas hoy?\n"
-                    f"• Escribe un *producto* para ver precios (ej: _leche, acetaminofén_)\n"
-                    f"• Escribe una *lista* para saber dónde te sale más barato (ej: _leche, arroz, jabón_)"
-                ))
-                return
-
+            es_primera = not historial
             data = await _call_agent(mensaje, historial, nombre_usuario=usuario["nombre"], ciudad_usuario=usuario.get("ciudad", ""))
             respuesta = _format_for_whatsapp(data)
+
+            # Saludo en la primera interacción del día
+            if es_primera:
+                nombre = usuario["nombre"].split()[0] if usuario.get("nombre") else ""
+                saludo = f"¡Hola, {nombre}! 👋\n\n" if nombre else "¡Hola! 👋\n\n"
+                respuesta = saludo + respuesta
+
             historial.append({"role": "user",      "content": mensaje})
             historial.append({"role": "assistant", "content": data.get("respuesta", respuesta)})
             await _save_historial(redis, phone, historial)
