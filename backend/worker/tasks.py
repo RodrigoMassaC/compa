@@ -12,8 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 def _run_async(coro):
-    """Ejecuta una coroutine asyncio desde un task Celery (sync)."""
-    return asyncio.run(coro)
+    """Ejecuta una coroutine asyncio desde un task Celery (sync).
+    Crea un loop nuevo para evitar conflictos con loops previos."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ── Tasa BCV ─────────────────────────────────────────────────────────────────
@@ -65,9 +71,9 @@ def run_farmatodo_prices(self):
 def run_madeirense_prices(self):
     """Actualiza precios de Central Madeirense."""
     try:
-        from app.services.scraper.spiders.central_madeirense_prices import MadeirensePriceSpider
+        from app.services.scraper.spiders.central_madeirense_prices import CentralMadeirensePriceSpider
         logger.info("run_madeirense_prices: iniciando...")
-        _run_async(MadeirensePriceSpider().run())
+        _run_async(CentralMadeirensePriceSpider().run())
         logger.info("run_madeirense_prices: completado")
     except Exception as exc:
         logger.error("run_madeirense_prices falló: %s", exc)

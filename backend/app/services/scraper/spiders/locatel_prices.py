@@ -44,7 +44,7 @@ class LocatelPriceSpider(BaseSpider):
                 FROM   productos_crudos
                 WHERE  id_establecimiento = :id_est
                   AND  url_origen IS NOT NULL
-                ORDER  BY updated_at ASC NULLS FIRST
+                ORDER  BY creado_en ASC
                 LIMIT  :lim
             """)
             result = await session.execute(q, {
@@ -141,10 +141,11 @@ class LocatelPriceSpider(BaseSpider):
         try:
             async with AsyncSessionLocal() as session:
                 await session.execute(text("""
-                    INSERT INTO historial_precios (
-                        id_producto_crudo, precio, moneda, fecha_captura
-                    ) VALUES (:id_prod, :precio, 'VES', NOW())
-                """), {"id_prod": id_producto_crudo, "precio": float(precio)})
+                    INSERT INTO historial_precios
+                        (id_producto_crudo, precio_bruto, moneda_origen, fuente_datos)
+                    VALUES
+                        (:id_prod, :precio, 'VES', 'SCRAPING_WEB')
+                """), {"id_prod": str(id_producto_crudo), "precio": precio})
                 await session.commit()
         except Exception as e:
             self.logger.error(f"Error insertando precio para {id_producto_crudo}: {e}")
