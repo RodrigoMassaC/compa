@@ -99,21 +99,26 @@ class FarmatodoPriceSpider(BaseSpider):
     """
 
     BATCH_SIZE = 10
-    DELAY_MIN = 2.0
-    DELAY_MAX = 3.5
+    DELAY_MIN = 3.0
+    DELAY_MAX = 5.0
+    PAUSA_CADA_N = 150   # pausa extra cada 150 productos
+    PAUSA_SEGUNDOS = 20  # pausa de 20s para que el rate limit se "enfríe"
 
     # ── Helpers de datos ─────────────────────────────────────────────────────
 
     async def _get_productos(self) -> list:
-        """Retorna filas (id_producto_crudo, url_origen) de Farmatodo con URL."""
+        """Retorna filas (id_producto_crudo, url_origen) de Farmatodo con URL
+        que aún no tienen precio registrado en historial_precios."""
         async with AsyncSessionLocal() as session:
             result = await session.execute(text("""
                 SELECT pc.id_producto_crudo, pc.url_origen
                 FROM productos_crudos pc
                 JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
                 JOIN cadenas_comerciales c ON c.id_cadena = e.id_cadena
+                LEFT JOIN historial_precios hp ON hp.id_producto_crudo = pc.id_producto_crudo
                 WHERE c.nombre_cadena = 'Farmatodo'
                   AND pc.url_origen IS NOT NULL
+                  AND hp.id_producto_crudo IS NULL
                 ORDER BY pc.creado_en DESC
             """))
             return result.fetchall()
@@ -212,6 +217,14 @@ class FarmatodoPriceSpider(BaseSpider):
                     f"  → Lote {lote_idx + 1} finalizado: "
                     f"✅ {extraidos} extraídos / ❌ {fallados} fallados"
                 )
+
+                # Pausa larga cada PAUSA_CADA_N productos (anti-bloqueo IP)
+                total_procesado = extraidos + fallados
+                if total_procesado > 0 and total_procesado % self.PAUSA_CADA_N == 0:
+                    self.logger.info(
+                        f"⏸️  Pausa anti-bloqueo: {self.PAUSA_SEGUNDOS}s tras {total_procesado} productos..."
+                    )
+                    await asyncio.sleep(self.PAUSA_SEGUNDOS)
 
             await context.close()
             await browser.close()

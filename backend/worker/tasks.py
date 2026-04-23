@@ -91,3 +91,103 @@ def run_locatel_prices(self):
     except Exception as exc:
         logger.error("run_locatel_prices falló: %s", exc)
         raise self.retry(exc=exc, countdown=300)
+
+
+# ── Catalog Scrapers (Fase A) ────────────────────────────────────────────────
+
+@celery_app.task(name="worker.tasks.run_farmatodo_catalog", bind=True, max_retries=1)
+def run_farmatodo_catalog(self):
+    """Indexa catálogo de Farmatodo (Fase A: sitemap + Fase B: detalles paralelos)."""
+    try:
+        from app.services.scraper.spiders.farmatodo import FarmatodoIndexSpider, FarmatodoDetailSpider
+        logger.info("run_farmatodo_catalog: Fase A (sitemap)...")
+        _run_async(FarmatodoIndexSpider().run())
+        logger.info("run_farmatodo_catalog: Fase B (detail paralelo, %d workers)...",
+                     FarmatodoDetailSpider.CONCURRENCY)
+        _run_async(FarmatodoDetailSpider().run())
+        logger.info("run_farmatodo_catalog: completado")
+    except Exception as exc:
+        logger.error("run_farmatodo_catalog falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_farmatodo_detail", bind=True, max_retries=1)
+def run_farmatodo_detail(self):
+    """Corre solo Fase B de Farmatodo (útil si Fase A ya cargó el sitemap en Redis)."""
+    try:
+        from app.services.scraper.spiders.farmatodo import FarmatodoDetailSpider
+        logger.info("run_farmatodo_detail: Fase B only...")
+        _run_async(FarmatodoDetailSpider().run())
+        logger.info("run_farmatodo_detail: completado")
+    except Exception as exc:
+        logger.error("run_farmatodo_detail falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_locatel_catalog", bind=True, max_retries=1)
+def run_locatel_catalog(self):
+    """Indexa catálogo de Locatel (Fase A + B)."""
+    try:
+        from app.services.scraper.spiders.locatel import LocatelIndexSpider, LocatelDetailSpider
+        logger.info("run_locatel_catalog: Fase A (index)...")
+        _run_async(LocatelIndexSpider().run())
+        logger.info("run_locatel_catalog: Fase B (detail)...")
+        _run_async(LocatelDetailSpider().run())
+        logger.info("run_locatel_catalog: completado")
+    except Exception as exc:
+        logger.error("run_locatel_catalog falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_gama_catalog", bind=True, max_retries=1)
+def run_gama_catalog(self):
+    """Indexa catálogo de Excelsior Gama (Fase A + B)."""
+    try:
+        from app.services.scraper.spiders.gama import GamaIndexSpider, GamaDetailSpider
+        logger.info("run_gama_catalog: Fase A (index)...")
+        _run_async(GamaIndexSpider().run())
+        logger.info("run_gama_catalog: Fase B (detail)...")
+        _run_async(GamaDetailSpider().run())
+        logger.info("run_gama_catalog: completado")
+    except Exception as exc:
+        logger.error("run_gama_catalog falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_farmago_catalog", bind=True, max_retries=1)
+def run_farmago_catalog(self):
+    """Indexa catálogo de Farmago (descubre productos y guarda con URL)."""
+    try:
+        from app.services.scraper.spiders.farmago import FarmagoSpider
+        logger.info("run_farmago_catalog: iniciando...")
+        _run_async(FarmagoSpider().run())
+        logger.info("run_farmago_catalog: completado")
+    except Exception as exc:
+        logger.error("run_farmago_catalog falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_madeirense_catalog", bind=True, max_retries=1)
+def run_madeirense_catalog(self):
+    """Indexa catálogo de Central Madeirense (descubre productos y guarda con URL)."""
+    try:
+        from app.services.scraper.spiders.central_madeirense import CentralMadeirenSeSpider
+        logger.info("run_madeirense_catalog: iniciando...")
+        _run_async(CentralMadeirenSeSpider().run())
+        logger.info("run_madeirense_catalog: completado")
+    except Exception as exc:
+        logger.error("run_madeirense_catalog falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.run_normalizador", bind=True, max_retries=1)
+def run_normalizador(self):
+    """Corre el normalizador IA sobre productos en estado PENDIENTE."""
+    try:
+        from app.services.normalizador.normalizer import NormalizadorIA
+        logger.info("run_normalizador: iniciando...")
+        _run_async(NormalizadorIA().run(batch_size=20))
+        logger.info("run_normalizador: completado")
+    except Exception as exc:
+        logger.error("run_normalizador falló: %s", exc)
+        raise self.retry(exc=exc, countdown=600)

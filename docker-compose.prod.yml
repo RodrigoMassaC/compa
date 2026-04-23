@@ -1,0 +1,122 @@
+# Docker Compose para producción — Compa
+# Para usar en EasyPanel o cualquier VPS con Docker Compose.
+#
+# Diferencias clave vs docker-compose.yml (dev):
+#   - No expone puertos 5432/6379 al host (solo red interna)
+#   - API sin --reload (evita reinicios)
+#   - Sin volúmenes de código (la imagen tiene el código compilado)
+#   - Límites de recursos
+#   - Restart policies más estrictas
+#   - Healthchecks en todos los servicios
+
+services:
+
+  # ── Base de datos PostgreSQL 15 con PostGIS y pg_trgm ──
+  compa-db:
+    image: postgis/postgis:15-3.3
+    container_name: compa-db
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - compa_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    networks:
+      - compa_net
+
+  # ── Redis: broker de Celery y almacén de sesiones conversacionales ──
+  compa-redis:
+    image: redis:7-alpine
+    container_name: compa-redis
+    restart: always
+    volumes:
+      - compa_redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - compa_net
+
+  # ── API FastAPI ──
+  compa-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: compa-api
+    restart: always
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      compa-db:
+        condition: service_healthy
+      compa-redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - compa_net
+
+  # ── Worker Celery para tareas asíncronas y CRON (Beat) ──
+  compa-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: compa-worker
+    restart: always
+    env_file:
+      - ./backend/.env
+    depends_on:
+      compa-db:
+        condition: service_healthy
+      compa-redis:
+        condition: service_healthy
+    command: >
+      celery -A worker.celery_app worker
+      --loglevel=info
+      --beat
+      --scheduler celery.beat.PersistentScheduler
+      --concurrency=2
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    networks:
+      - compa_net
+
+volumes:
+  compa_db_data:
+  compa_redis_data:
+
+networks:
+  compa_net:
+    driver: bridge

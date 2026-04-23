@@ -46,3 +46,9 @@ dist/
 *.log
 celerybeat-schedule
 celerybeat.pid
+
+# Deploy artifacts (dumps de DB, etc.)
+/deploy/
+*.sql
+*.sql.gz
+!backend/app/core/schema.sql
