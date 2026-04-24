@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     meta_phone_number_id: str = ""
     meta_waba_id: str = ""
     meta_verify_token: str = ""
+    meta_app_secret: str = ""  # Para verificar firmas SHA-256 de webhooks
 
     # ── Stripe ──
     stripe_secret_key: str = ""

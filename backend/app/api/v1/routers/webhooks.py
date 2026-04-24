@@ -20,12 +20,18 @@ logger = logging.getLogger(__name__)
 def _verify_signature(body: bytes, signature_header: str) -> bool:
     """
     Verifica la firma SHA-256 que Meta incluye en cada webhook POST.
+    Meta firma con el App Secret (no con el access token).
     Previene que actores externos llamen al endpoint con datos falsos.
+    Si META_APP_SECRET no está configurado, se omite la verificación
+    (útil en entornos locales donde Meta no puede firmar).
     """
+    if not settings.meta_app_secret:
+        logger.warning("META_APP_SECRET no configurado — verificación de firma omitida")
+        return True
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = hmac.new(
-        settings.meta_whatsapp_token.encode(),
+        settings.meta_app_secret.encode(),
         body,
         hashlib.sha256,
     ).hexdigest()
