@@ -41,13 +41,24 @@ class ChatResponse(BaseModel):
 async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
     """
     Busca productos usando múltiples términos.
-    Usa threshold 0.25 para trigram (más permisivo en español)
-    pero filtra por similitud >= 0.1 para evitar basura.
+
+    Estrategia: requiere SUBSTRING match de al menos una palabra significativa
+    del término en el nombre, terminos_busqueda o marca. Esto evita falsos
+    positivos del trigram como "cebolla" → "Vela Bipa Blancas".
+
     Retorna hasta 8 productos maestros únicos con todas sus ofertas.
     """
     todos = {}
 
     for termino in terminos[:3]:  # Máximo 3 términos para no sobrecargar
+        termino_norm = _normalizar_termino(termino)
+        palabras = [p for p in termino_norm.split() if len(p) >= 3]
+        if not palabras:
+            palabras = [termino_norm]
+
+        # Cada palabra significativa se convierte en un patrón ILIKE.
+        # El producto debe contener AL MENOS UNA de las palabras.
+        # Ej. "cebolla blanca" → buscar "%cebolla%" OR "%blanca%"
         query = text("""
             WITH tasa AS (
                 SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
@@ -62,12 +73,28 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                 JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
                 JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
                 ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+            ),
+            candidatos AS (
+                SELECT
+                    pm.id_producto_maestro,
+                    pm.nombre_estandar,
+                    pm.marca,
+                    pm.presentacion,
+                    -- similitud trigram entre término y nombre para ranking
+                    GREATEST(
+                        similarity(LOWER(pm.nombre_estandar), :termino),
+                        similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino)
+                    ) as sim
+                FROM productos_maestros pm
+                WHERE LOWER(pm.nombre_estandar) ~ :rx
+                   OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
+                   OR LOWER(COALESCE(pm.marca, '')) ~ :rx
             )
             SELECT
-                pm.id_producto_maestro,
-                pm.nombre_estandar,
-                pm.marca,
-                pm.presentacion,
+                c.id_producto_maestro,
+                c.nombre_estandar,
+                c.marca,
+                c.presentacion,
                 CASE
                     WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
                     WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
@@ -76,27 +103,22 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                     WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
                     WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
                 END as precio_ves,
-                c.nombre_cadena,
-                GREATEST(
-                    similarity(pm.nombre_estandar, :termino),
-                    similarity(COALESCE(pm.terminos_busqueda, ''), :termino)
-                ) as sim
-            FROM productos_maestros pm
-            JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
-            JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
-            WHERE (
-                similarity(pm.nombre_estandar, :termino) > 0.15
-                OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.15
-                OR pm.nombre_estandar ILIKE :search
-                OR COALESCE(pm.terminos_busqueda, '') ILIKE :search
-            )
-            ORDER BY sim DESC, precio_usd ASC NULLS LAST
+                cc.nombre_cadena,
+                c.sim
+            FROM candidatos c
+            JOIN precios_recientes pr ON pr.id_producto_maestro = c.id_producto_maestro
+            JOIN cadenas_comerciales cc ON cc.id_cadena = pr.id_cadena
+            ORDER BY c.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
             LIMIT 20
         """)
 
+        # Regex POSIX: "(cebolla|blanca)" — debe contener al menos una palabra
+        # Usa word boundaries para no matchear dentro de otras palabras.
+        regex = "(" + "|".join(palabras) + ")"
+
         result = await db.execute(query, {
-            "termino": termino,
-            "search": f"%{termino}%"
+            "termino": termino_norm,
+            "rx": regex,
         })
         rows = result.mappings().all()
 
@@ -155,17 +177,21 @@ def _normalizar_termino(s: str) -> str:
 async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
     """
     Para un término, retorna el producto más barato disponible en cada tienda.
-    Retorna lista de {tienda, nombre, marca, presentacion, precio_usd, precio_ves}.
 
-    Usa una búsqueda combinada: similaridad trigram (pg_trgm) + ILIKE substring
-    sobre los términos individuales. Esto es mucho más tolerante a variaciones
-    como "cocacola" vs "coca-cola" o "leche jabonosa" vs productos con ambas palabras.
+    Estrategia: exige que alguna palabra significativa del término aparezca
+    en nombre_estandar, terminos_busqueda o marca (substring match). Esto
+    evita ruido del trigram (ej. "cebolla" → "Vela Bipa Blancas").
+
+    El producto cuyo nombre contiene MÁS palabras del término se prefiere
+    (relevancia), y en caso de empate se toma el más barato por tienda.
     """
     termino_norm = _normalizar_termino(termino)
-    # Palabras del término para ILIKE (evita ruido: palabras >=3 chars)
     palabras = [p for p in termino_norm.split() if len(p) >= 3]
-    # Pattern tipo %coca%cola% para match substring flexible
-    pattern_ilike = "%" + "%".join(palabras) + "%" if palabras else f"%{termino_norm}%"
+    if not palabras:
+        palabras = [termino_norm]
+
+    # Regex: debe contener al menos una de las palabras significativas
+    regex = "(" + "|".join(palabras) + ")"
 
     query = text("""
         WITH tasa AS (
@@ -181,12 +207,27 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
             JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
             JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
             ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+        ),
+        candidatos AS (
+            SELECT
+                pm.id_producto_maestro,
+                pm.nombre_estandar,
+                pm.marca,
+                pm.presentacion,
+                GREATEST(
+                    similarity(LOWER(pm.nombre_estandar), :termino),
+                    similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino)
+                ) as sim
+            FROM productos_maestros pm
+            WHERE LOWER(pm.nombre_estandar) ~ :rx
+               OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
+               OR LOWER(COALESCE(pm.marca, '')) ~ :rx
         )
         SELECT DISTINCT ON (c.id_cadena)
             c.nombre_cadena,
-            pm.nombre_estandar,
-            pm.marca,
-            pm.presentacion,
+            cand.nombre_estandar,
+            cand.marca,
+            cand.presentacion,
             CASE
                 WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
                 WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
@@ -195,22 +236,16 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
                 WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
                 WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
             END as precio_ves
-        FROM productos_maestros pm
-        JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
+        FROM candidatos cand
+        JOIN precios_recientes pr ON pr.id_producto_maestro = cand.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
-        WHERE (
-            -- Similaridad trigram (tolerante a typos)
-            similarity(LOWER(pm.nombre_estandar), :termino) > 0.25
-            OR similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino) > 0.25
-            -- Substring con todas las palabras del término (tolerante a orden/guiones)
-            OR LOWER(pm.nombre_estandar) ILIKE :pattern
-            OR LOWER(COALESCE(pm.terminos_busqueda, '')) ILIKE :pattern
-            OR LOWER(COALESCE(pm.marca, '')) ILIKE :pattern
-        )
-        ORDER BY c.id_cadena, precio_usd ASC NULLS LAST
+        -- DISTINCT ON por tienda toma el primero → ordenamos por sim DESC
+        -- y luego precio ASC, así cada tienda trae el match MÁS RELEVANTE
+        -- (no el más barato ignorando relevancia).
+        ORDER BY c.id_cadena, cand.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
     """)
 
-    result = await db.execute(query, {"termino": termino_norm, "pattern": pattern_ilike})
+    result = await db.execute(query, {"termino": termino_norm, "rx": regex})
     rows = result.mappings().all()
 
     return [
@@ -242,15 +277,27 @@ async def filtrar_carrito_batch(matches: list[dict], client) -> set[int]:
 
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=100,
+        max_tokens=200,
         messages=[{
             "role": "user",
             "content": (
-                f"Revisa si cada producto es realmente lo que el usuario buscó "
-                f"(descarta si el término buscado es solo un ingrediente secundario).\n\n"
-                f"{lineas}\n\n"
-                f"Responde SOLO con los números de los IRRELEVANTES separados por coma. "
-                f"Si todos son relevantes: ninguno"
+                "Eres un filtro estricto para una app de comparación de precios. "
+                "Para cada línea, decide si el producto SÍ es lo que el usuario quería.\n\n"
+                "REGLAS DE EXCLUSIÓN (marcar como IRRELEVANTE):\n"
+                "- El término buscado aparece como ingrediente secundario o descripción "
+                "(ej. buscó 'azúcar' → producto es 'Coca-Cola Sin Azúcar' → IRRELEVANTE)\n"
+                "- El producto es una categoría totalmente distinta "
+                "(ej. buscó 'cebolla' → producto es 'Vela Bipa Blancas' → IRRELEVANTE)\n"
+                "- El producto es un derivado/procesado cuando pidieron el básico "
+                "(ej. buscó 'tomate' → producto es 'Salsa de Tomate' → IRRELEVANTE si pidió 'tomate' a secas)\n"
+                "- El producto requiere preparación muy distinta "
+                "(ej. buscó 'arroz' → producto es 'Crema de Arroz Infantil' → IRRELEVANTE salvo que pida infantil)\n\n"
+                "REGLAS PARA MANTENER (relevante):\n"
+                "- Match exacto de producto + marca + presentación\n"
+                "- Variantes razonables del producto (ej. 'leche' → 'Leche Entera Parmalat' OK)\n\n"
+                f"Productos a revisar:\n{lineas}\n\n"
+                "Responde SOLO con los números de los IRRELEVANTES separados por coma. "
+                "Si todos son relevantes responde: ninguno"
             )
         }]
     )
@@ -339,7 +386,11 @@ async def calcular_carrito_optimo(items: list[str], db: AsyncSession, client) ->
                     "disponible": False,
                 })
 
-    lista_tiendas = list(tiendas.values())
+    # Filtrar tiendas que al menos tienen 1 producto de la lista
+    # (nunca excluimos tiendas con 1 solo match — el usuario decide qué hacer con esa info)
+    lista_tiendas = [t for t in tiendas.values() if t["items_encontrados"] >= 1]
+
+    # Orden principal: más items encontrados primero, luego menor total USD
     lista_tiendas.sort(key=lambda x: (-x["items_encontrados"], x["total_usd"]))
 
     tiendas_completas = [t for t in lista_tiendas if t["items_encontrados"] == len(items)]
@@ -476,27 +527,45 @@ Cada item: nombre limpio del producto en 1-3 palabras. Ejemplos:
 RESPONSE_SYSTEM = """Eres Compa, el asistente oficial de la app venezolana de comparación de precios.
 
 REGLAS ESTRICTAS:
-1. NUNCA sugieras "revisar en otros supermercados" — eso es exactamente lo que la app hace por el usuario
-2. NUNCA digas "los precios pueden variar según ubicación" como consejo genérico
-3. SIEMPRE muestra comparación entre tiendas cuando hay más de una opción
-4. Destaca cuál tienda tiene el precio más bajo
-5. Muestra precios en USD y Bs (bolívares). La conversión a Bs usa la tasa oficial del BCV — NO digas "aprox" ni "aproximadamente", es la tasa oficial
-6. Sé directo y útil — máximo 3-4 líneas de texto
-7. Si hay múltiples marcas o presentaciones, menciónalas brevemente
-8. Si NO hay resultados relevantes, di claramente qué buscaste y pide más detalles del producto
-9. Tono: amigable pero profesional, en español venezolano natural (sin "hermano", sin emojis excesivos)
-10. Después de mostrar resultados, ofrece brevemente: "¿Quieres ver más detalles o buscar otro producto?\""""
+1. NUNCA sugieras otras tiendas fuera de las que aparecen en los resultados (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). NUNCA menciones Makro, Día, Plan Suárez, Supermercados Unidos ni otras.
+2. NUNCA digas "los precios pueden variar según ubicación" como consejo genérico.
+3. SIEMPRE muestra comparación entre tiendas cuando hay más de una opción.
+4. Destaca cuál tienda tiene el precio más bajo.
+5. Muestra precios en USD y Bs (bolívares). La conversión usa la tasa oficial del BCV — NO digas "aprox".
+6. Sé directo — máximo 3-4 líneas de texto.
+7. Si hay varias marcas/presentaciones, menciónalas brevemente.
+8. Si los resultados NO contienen el producto exacto que pidió el usuario, di claramente que no lo tienes en DB, pide detalles adicionales (marca, presentación). NO inventes resultados.
+9. Tono: amigable pero profesional, español venezolano natural. Sin excesivos emojis.
+10. SIEMPRE cierra con una pregunta clara de continuación, por ejemplo:
+   - "¿Buscas otra marca o presentación?"
+   - "¿Quieres añadir algo más a tu lista?"
+   - "¿Es tu compra final o seguimos comparando?\""""
 
 
-CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. El usuario quiere saber dónde comprar su lista completa al menor costo.
+CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. El usuario mandó una lista y quiere saber dónde le sale más barata.
 
-REGLAS:
-1. Indica directamente cuál tienda tiene el total más bajo para la lista completa
-2. Menciona el ahorro si hay diferencia significativa entre tiendas con lista completa
-3. Si alguna tienda no tiene todos los productos, menciónalo en una línea
-4. Muestra el total en USD y Bs de la mejor opción
-5. Máximo 3-4 líneas — el frontend muestra el desglose detallado por tienda
-6. Tono directo, español venezolano natural"""
+REGLAS DE RESPUESTA — MUY IMPORTANTES:
+
+1. FORMATO: agrupa SIEMPRE por tienda, NO por producto. Usa esta plantilla:
+
+   **<Tienda líder>** es tu mejor opción para *N de N productos*: $X.XX (Bs XX.XX)
+   - <Producto 1 exacto> → $A (Bs aa)
+   - <Producto 2 exacto> → $B (Bs bb)
+
+   Si otras tiendas también tienen parte de la lista, lístalas debajo (siempre que tengan ≥1 producto):
+
+   **<Otra tienda>** *(M de N productos)* — $Y.YY (Bs YY)
+   - <Producto> → $C (Bs cc)
+
+2. Nunca digas que una tienda "no te sirve" solo por tener 1 solo producto.
+3. Destaca el AHORRO en USD vs la tienda más cara (si aplica).
+4. NO sugieras tiendas externas a las de nuestra DB (ni Makro, Día, etc.).
+5. Conversiones a Bs con tasa oficial BCV — NO uses "aprox".
+6. Cierre obligatorio con un CTA como:
+   - "¿Te confirmamos si hay otra opción más económica?"
+   - "¿Quieres que agregue algún producto más a la lista?"
+   - "¿Esa es tu compra final?"
+7. Tono: amable, profesional, español venezolano natural. Sin emojis excesivos."""
 
 
 # ---------------------------------------------------------------------------
