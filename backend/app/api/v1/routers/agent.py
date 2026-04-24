@@ -140,11 +140,33 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
     return resultado[:5]
 
 
+def _normalizar_termino(s: str) -> str:
+    """Quita acentos, guiones, simbolos y baja a minusculas — para mejor match."""
+    import unicodedata
+    import re
+    s = s.lower().strip()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")  # sin acentos
+    s = re.sub(r"[-_/]", " ", s)  # guiones a espacios
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
     """
     Para un término, retorna el producto más barato disponible en cada tienda.
     Retorna lista de {tienda, nombre, marca, presentacion, precio_usd, precio_ves}.
+
+    Usa una búsqueda combinada: similaridad trigram (pg_trgm) + ILIKE substring
+    sobre los términos individuales. Esto es mucho más tolerante a variaciones
+    como "cocacola" vs "coca-cola" o "leche jabonosa" vs productos con ambas palabras.
     """
+    termino_norm = _normalizar_termino(termino)
+    # Palabras del término para ILIKE (evita ruido: palabras >=3 chars)
+    palabras = [p for p in termino_norm.split() if len(p) >= 3]
+    # Pattern tipo %coca%cola% para match substring flexible
+    pattern_ilike = "%" + "%".join(palabras) + "%" if palabras else f"%{termino_norm}%"
+
     query = text("""
         WITH tasa AS (
             SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
@@ -177,13 +199,18 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
         JOIN precios_recientes pr ON pr.id_producto_maestro = pm.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
         WHERE (
-            similarity(pm.nombre_estandar, :termino) > 0.35
-            OR similarity(COALESCE(pm.terminos_busqueda, ''), :termino) > 0.35
+            -- Similaridad trigram (tolerante a typos)
+            similarity(LOWER(pm.nombre_estandar), :termino) > 0.25
+            OR similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino) > 0.25
+            -- Substring con todas las palabras del término (tolerante a orden/guiones)
+            OR LOWER(pm.nombre_estandar) ILIKE :pattern
+            OR LOWER(COALESCE(pm.terminos_busqueda, '')) ILIKE :pattern
+            OR LOWER(COALESCE(pm.marca, '')) ILIKE :pattern
         )
         ORDER BY c.id_cadena, precio_usd ASC NULLS LAST
     """)
 
-    result = await db.execute(query, {"termino": termino})
+    result = await db.execute(query, {"termino": termino_norm, "pattern": pattern_ilike})
     rows = result.mappings().all()
 
     return [
