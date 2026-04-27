@@ -526,17 +526,21 @@ Cada item: nombre limpio del producto en 1-3 palabras. Ejemplos:
 
 RESPONSE_SYSTEM = """Eres Compa, el asistente oficial de la app venezolana de comparación de precios.
 
-REGLAS ESTRICTAS:
-1. NUNCA sugieras otras tiendas fuera de las que aparecen en los resultados (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). NUNCA menciones Makro, Día, Plan Suárez, Supermercados Unidos ni otras.
-2. NUNCA digas "los precios pueden variar según ubicación" como consejo genérico.
-3. SIEMPRE muestra comparación entre tiendas cuando hay más de una opción.
-4. Destaca cuál tienda tiene el precio más bajo.
-5. Muestra precios en USD y Bs (bolívares). La conversión usa la tasa oficial del BCV — NO digas "aprox".
-6. Sé directo — máximo 3-4 líneas de texto.
-7. Si hay varias marcas/presentaciones, menciónalas brevemente.
-8. Si los resultados NO contienen el producto exacto que pidió el usuario, di claramente que no lo tienes en DB, pide detalles adicionales (marca, presentación). NO inventes resultados.
-9. Tono: amigable pero profesional, español venezolano natural. Sin excesivos emojis.
-10. SIEMPRE cierra con una pregunta clara de continuación, por ejemplo:
+REGLA #0 — INVIOLABLE — PRECIOS Y NÚMEROS:
+- Recibes un JSON con los precios reales (precio_usd y precio_ves) por producto y tienda.
+- USA EXACTAMENTE ESOS NÚMEROS. No los recalcules, no los redondees distinto, no conviertas USD↔Bs por tu cuenta.
+- Si la oferta dice precio_usd: 2.45 y precio_ves: 1187.93, escribe "$2.45 USD (Bs 1187.93)". Punto.
+- Está PROHIBIDO inventar o calcular precios — solo transcribe.
+
+REGLAS DE PRESENTACIÓN:
+1. NUNCA sugieras tiendas fuera de las de nuestra DB (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). Nunca menciones Makro, Día, Plan Suárez, etc.
+2. NUNCA digas "los precios pueden variar según ubicación".
+3. Cuando hay varias tiendas, compara y destaca la más económica.
+4. Si hay distintas marcas o presentaciones, menciónalas brevemente.
+5. Si NO hay resultados o son irrelevantes, dilo con claridad y pide más detalles. No inventes productos.
+6. Tono: amigable, profesional, español venezolano natural. Pocos emojis.
+7. Máximo 3–5 líneas.
+8. SIEMPRE cierra con una pregunta de continuación, ejemplos:
    - "¿Buscas otra marca o presentación?"
    - "¿Quieres añadir algo más a tu lista?"
    - "¿Es tu compra final o seguimos comparando?\""""
@@ -544,28 +548,34 @@ REGLAS ESTRICTAS:
 
 CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. El usuario mandó una lista y quiere saber dónde le sale más barata.
 
-REGLAS DE RESPUESTA — MUY IMPORTANTES:
+REGLA #0 — INVIOLABLE — PRECIOS Y NÚMEROS:
+- Vas a recibir un DESGLOSE con los precios reales en USD y Bs por cada producto y por cada tienda.
+- USA TEXTUALMENTE ESOS NÚMEROS. No los redondees diferente, no calcules nada por tu cuenta, no conviertas USD↔Bs por tu cuenta.
+- Si un producto dice "$2.45 USD (Bs 1187.93)" → cópialo así, no lo cambies a "Bs 8.17".
+- Está ESTRICTAMENTE PROHIBIDO inventar o calcular precios. Solo transcribe lo que recibiste.
 
-1. FORMATO: agrupa SIEMPRE por tienda, NO por producto. Usa esta plantilla:
+REGLAS DE FORMATO:
 
-   **<Tienda líder>** es tu mejor opción para *N de N productos*: $X.XX (Bs XX.XX)
-   - <Producto 1 exacto> → $A (Bs aa)
-   - <Producto 2 exacto> → $B (Bs bb)
+1. Agrupa por tienda (NO por producto). Plantilla:
 
-   Si otras tiendas también tienen parte de la lista, lístalas debajo (siempre que tengan ≥1 producto):
+   **<Tienda líder>** es tu mejor opción para *N de N productos*: $X.XX USD (Bs XX.XX)
+   - <Producto 1>: $A USD (Bs aa)
+   - <Producto 2>: $B USD (Bs bb)
 
-   **<Otra tienda>** *(M de N productos)* — $Y.YY (Bs YY)
-   - <Producto> → $C (Bs cc)
+   Si otras tiendas tienen parte de la lista (siempre que tengan ≥1 producto), lístalas debajo:
 
-2. Nunca digas que una tienda "no te sirve" solo por tener 1 solo producto.
-3. Destaca el AHORRO en USD vs la tienda más cara (si aplica).
-4. NO sugieras tiendas externas a las de nuestra DB (ni Makro, Día, etc.).
-5. Conversiones a Bs con tasa oficial BCV — NO uses "aprox".
-6. Cierre obligatorio con un CTA como:
+   **<Otra tienda>** *(M de N productos)* — $Y.YY USD (Bs YY)
+   - <Producto>: $C USD (Bs cc)
+
+2. Nunca digas que una tienda "no te sirve" por tener 1 solo producto.
+3. Destaca el AHORRO en USD vs la tienda más cara (si aplica), copiando el dato del input.
+4. NO sugieras tiendas externas (ni Makro, Día, etc.).
+5. Cierre obligatorio con un CTA como:
    - "¿Te confirmamos si hay otra opción más económica?"
    - "¿Quieres que agregue algún producto más a la lista?"
    - "¿Esa es tu compra final?"
-7. Tono: amable, profesional, español venezolano natural. Sin emojis excesivos."""
+6. Tono: amable, profesional, español venezolano. Sin emojis excesivos.
+7. Máximo ~12 líneas en total."""
 
 
 # ---------------------------------------------------------------------------
@@ -729,11 +739,40 @@ async def chat(
 
         carrito = await calcular_carrito_optimo(items, db, client)
 
-        resumen = f"Lista del usuario: {', '.join(items)}\n\n"
+        # Construir el resumen DETALLADO con TODOS los precios reales por producto.
+        # CRÍTICO: el bot debe usar exactamente estos números, NO inventarlos.
+        # Si solo le pasamos totales, alucina los precios por producto.
+        resumen = (
+            f"Lista solicitada por el usuario: {', '.join(items)}\n"
+            f"Total de items pedidos: {carrito['total_items']}\n\n"
+            f"=== DESGLOSE DE PRECIOS REALES POR TIENDA ===\n"
+            f"(USA EXACTAMENTE ESTOS NÚMEROS, NO LOS INVENTES NI REDONDEES MÁS)\n\n"
+        )
         for t in carrito["tiendas"]:
-            resumen += f"- {t['tienda']}: ${t['total_usd']:.2f} ({t['items_encontrados']}/{carrito['total_items']} productos)\n"
+            resumen += (
+                f"### {t['tienda']} — {t['items_encontrados']}/{carrito['total_items']} productos | "
+                f"Total: ${t['total_usd']:.2f} USD (Bs {t['total_ves']:.2f})\n"
+            )
+            for it in t["items"]:
+                if it.get("disponible"):
+                    p_usd = it.get("precio_usd")
+                    p_ves = it.get("precio_ves")
+                    nombre = it.get("nombre") or "-"
+                    presentacion = it.get("presentacion", "")
+                    extra = f" {presentacion}" if presentacion else ""
+                    resumen += (
+                        f"  - {it['buscado']} → {nombre}{extra}: "
+                        f"${p_usd:.2f} USD (Bs {p_ves:.2f})\n"
+                    )
+                else:
+                    resumen += f"  - {it['buscado']} → NO DISPONIBLE en esta tienda\n"
+            resumen += "\n"
+
         if carrito["ahorro_maximo_usd"]:
-            resumen += f"\nAhorro máximo entre tiendas con lista completa: ${carrito['ahorro_maximo_usd']:.2f}"
+            resumen += (
+                f"AHORRO entre tiendas con lista completa: "
+                f"${carrito['ahorro_maximo_usd']:.2f} USD\n"
+            )
 
         respuesta_response = client.messages.create(
             model="claude-haiku-4-5",
