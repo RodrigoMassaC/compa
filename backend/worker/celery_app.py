@@ -64,6 +64,10 @@ celery_app.conf.update(
             "task": "worker.tasks.run_gama_catalog",
             "schedule": crontab(minute=0, hour=14, day_of_week=0),
         },
+        "scrape-gama-prices": {
+            "task": "worker.tasks.run_gama_prices",
+            "schedule": crontab(minute=0, hour=16, day_of_week=0),
+        },
 
         # ── Farmatodo mensual (día 1 del mes) ───────────────────────────────
         # Fase A+B del catálogo (descubre productos nuevos y actualiza los existentes)

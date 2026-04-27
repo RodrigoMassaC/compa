@@ -180,6 +180,19 @@ def run_madeirense_catalog(self):
         raise self.retry(exc=exc, countdown=300)
 
 
+@celery_app.task(name="worker.tasks.run_gama_prices", bind=True, max_retries=2)
+def run_gama_prices(self):
+    """Refresca precios de productos de Excelsior Gama (visita cada URL conocida)."""
+    try:
+        from app.services.scraper.spiders.gama_prices import GamaPriceSpider
+        logger.info("run_gama_prices: iniciando...")
+        _run_async(GamaPriceSpider().run())
+        logger.info("run_gama_prices: completado")
+    except Exception as exc:
+        logger.error("run_gama_prices falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
 @celery_app.task(name="worker.tasks.run_normalizador", bind=True, max_retries=1)
 def run_normalizador(self):
     """Corre el normalizador IA sobre productos en estado PENDIENTE."""
