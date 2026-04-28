@@ -70,6 +70,15 @@ CATEGORIAS = [
     ("licores", "G0101"),
     ("hogar", "H0101"),
     ("mascotas", "I0101"),
+    # ── Frescos (slug-only — Angular resuelve el código) ────────────────────
+    ("frutas", None),
+    ("verduras-legumbres", None),
+    ("carniceria", None),
+    ("charcuteria", None),
+    ("pescaderia", None),
+    ("congelados", None),
+    ("huevos", None),
+    ("quesos", None),
 ]
 
 
@@ -112,17 +121,23 @@ class GamaIndexSpider(BaseSpider):
 
         return []
 
-    async def _scrape_categoria(self, context, redis_client: aioredis.Redis, slug: str, codigo: str):
-        """Recorre todas las páginas de una categoría."""
-        self.logger.info(f"Procesando categoría: {slug} ({codigo})")
+    async def _scrape_categoria(self, context, redis_client: aioredis.Redis, slug: str, codigo):
+        """Recorre todas las páginas de una categoría.
+
+        Si `codigo` es None, navega a /es/{slug} y deja que Angular sirva la
+        página (útil para categorías cuyo código no conocemos a priori).
+        """
+        self.logger.info(f"Procesando categoría: {slug} ({codigo or 'sin código'})")
         page_num = 0  # SAP Hybris usa base-0
         total_nuevos = 0
 
         while True:
-            if page_num == 0:
-                url = f"{BASE_URL}/es/{slug}/c/{codigo}"
+            if codigo:
+                base = f"{BASE_URL}/es/{slug}/c/{codigo}"
             else:
-                url = f"{BASE_URL}/es/{slug}/c/{codigo}?currentPage={page_num}"
+                base = f"{BASE_URL}/es/{slug}"
+
+            url = base if page_num == 0 else f"{base}?currentPage={page_num}"
 
             nuevos, hay_mas = await self._process_page(context, redis_client, url, page_num)
             total_nuevos += nuevos
