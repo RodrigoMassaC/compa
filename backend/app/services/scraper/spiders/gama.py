@@ -70,15 +70,20 @@ CATEGORIAS = [
     ("licores", "G0101"),
     ("hogar", "H0101"),
     ("mascotas", "I0101"),
-    # ── Frescos (slug-only — Angular resuelve el código) ────────────────────
-    ("frutas", None),
-    ("verduras-legumbres", None),
-    ("carniceria", None),
-    ("charcuteria", None),
-    ("pescaderia", None),
-    ("congelados", None),
-    ("huevos", None),
-    ("quesos", None),
+    # ── Frescos y proteínas (códigos confirmados desde el menú) ────────────
+    ("frutas", "A0205"),
+    ("verduras-legumbres", "A0206"),
+    ("charcuteria", "A0202"),
+    ("carniceria", "A0201"),
+    ("quesos", "A0203"),
+    ("huevos", "A0207"),
+    # ── Otras categorías confirmadas ───────────────────────────────────────
+    ("despensa/lacteos", "A0101"),
+    ("cuidado-personal-salud/cuidado-bucal", "A0601"),
+    ("cuidado-personal-salud/farmacia", "A0604"),
+    ("lavaplatos", "A0701"),
+    ("limpieza/accesorios-limpieza", "A0705"),
+    ("cuidado-prendas", "A0708"),
 ]
 
 
