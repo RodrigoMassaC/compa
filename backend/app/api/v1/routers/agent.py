@@ -309,23 +309,23 @@ async def filtrar_carrito_batch(matches: list[dict], client) -> set[int]:
         messages=[{
             "role": "user",
             "content": (
-                "Eres un filtro estricto para una app de comparación de precios. "
-                "Para cada línea, decide si el producto SÍ es lo que el usuario quería.\n\n"
-                "REGLAS DE EXCLUSIÓN (marcar como IRRELEVANTE):\n"
-                "- El término buscado aparece como ingrediente secundario o descripción "
-                "(ej. buscó 'azúcar' → producto es 'Coca-Cola Sin Azúcar' → IRRELEVANTE)\n"
+                "Eres un filtro para una app de comparación de precios. Sé GENEROSO: "
+                "solo descarta lo claramente irrelevante. En duda, MANTÉN.\n\n"
+                "DESCARTAR (IRRELEVANTE) solo si:\n"
+                "- El término aparece como ingrediente secundario o descripción negativa "
+                "(buscó 'azúcar' → 'Coca-Cola Sin Azúcar' → IRRELEVANTE)\n"
                 "- El producto es una categoría totalmente distinta "
-                "(ej. buscó 'cebolla' → producto es 'Vela Bipa Blancas' → IRRELEVANTE)\n"
-                "- El producto es un derivado/procesado cuando pidieron el básico "
-                "(ej. buscó 'tomate' → producto es 'Salsa de Tomate' → IRRELEVANTE si pidió 'tomate' a secas)\n"
-                "- El producto requiere preparación muy distinta "
-                "(ej. buscó 'arroz' → producto es 'Crema de Arroz Infantil' → IRRELEVANTE salvo que pida infantil)\n\n"
-                "REGLAS PARA MANTENER (relevante):\n"
-                "- Match exacto de producto + marca + presentación\n"
-                "- Variantes razonables del producto (ej. 'leche' → 'Leche Entera Parmalat' OK)\n\n"
+                "(buscó 'cebolla' → 'Vela Bipa Blancas' → IRRELEVANTE)\n"
+                "- El usuario pidió específicamente el básico y solo hay derivados muy procesados "
+                "(buscó 'leche fresca' → 'Crema de Leche Concentrada Industrial' → IRRELEVANTE)\n\n"
+                "MANTENER (relevante) — sé permisivo:\n"
+                "- Match exacto, variantes razonables\n"
+                "- Productos con nombre largo, marca, presentación variada (todos OK)\n"
+                "- Derivados que pueden servir (buscó 'tomate' → 'Salsa de Tomate' → MANTENER)\n"
+                "- Distintas presentaciones del mismo medicamento o producto (todas OK)\n\n"
                 f"Productos a revisar:\n{lineas}\n\n"
                 "Responde SOLO con los números de los IRRELEVANTES separados por coma. "
-                "Si todos son relevantes responde: ninguno"
+                "Si todos son razonables responde: ninguno"
             )
         }]
     )
@@ -488,36 +488,55 @@ async def filtrar_relevantes(
 
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=100,
+        max_tokens=150,
         messages=[{
             "role": "user",
-            "content": f"""Contexto: app venezolana de comparación de precios en supermercados.
+            "content": f"""Contexto: app venezolana de comparación de precios en supermercados y farmacias.
 El usuario escribió: "{mensaje_original}"
 Término principal buscado: "{termino_principal}"
 Términos alternativos considerados: {", ".join(terminos[1:]) if len(terminos) > 1 else "ninguno"}
 
-Productos encontrados en la base de datos:
+Productos candidatos (ya filtrados por substring):
 {lista}
 
-Tarea: indica los números de los productos que SÍ son lo que el usuario busca.
-Regla clave: excluye productos donde el término buscado es solo un ingrediente secundario o parte del nombre de algo completamente distinto.
-Formato: números separados por comas. Ejemplo: 1,3
-Si ninguno es relevante: ninguno"""
+Tarea: indica los números de los productos que son razonablemente lo que el usuario busca.
+
+REGLAS:
+- Sé GENEROSO: mantén productos aunque tengan nombre largo o variantes (ej. "Omeprazol Cápsulas 20 mg Genven 14 unidades" es válido para "omeprazol").
+- SOLO excluye cuando el producto es claramente algo distinto:
+  * "azucar" → "Coca-Cola Sin Azúcar" → IRRELEVANTE
+  * "cebolla" → "Vela Bipa Blancas" → IRRELEVANTE
+  * "leche" → "Crema de Leche" → MANTENER (es derivado válido)
+  * "tomate" → "Salsa de Tomate" → MANTENER (es derivado válido para muchas búsquedas)
+- En duda, MANTÉN el producto (mejor mostrar opciones que no mostrar nada).
+
+Formato: números separados por comas. Ejemplo: 1,3,5
+Si todos son razonablemente relevantes: todos
+Si NINGUNO es razonable (raro): ninguno"""
         }]
     )
 
     raw = response.content[0].text.strip()
     logger.debug("filtrar_relevantes | termino=%s | raw=%s", termino_principal, raw)
 
-    if raw.lower() == "ninguno":
-        return []
+    raw_low = raw.lower()
+    if raw_low == "todos":
+        return productos
+    if raw_low == "ninguno":
+        # Fail-safe: si Claude dice ninguno, mantener los primeros 5 igual.
+        # El usuario decide si son útiles. Mejor mostrar algo que nada.
+        logger.warning(
+            "filtrar_relevantes: Claude descartó todos pero retornamos top 5 como fail-safe (termino=%s)",
+            termino_principal,
+        )
+        return productos[:5]
 
     try:
         indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
         filtrados = [productos[i] for i in indices if 0 <= i < len(productos)]
-        return filtrados if filtrados else productos  # fail-safe
+        return filtrados if filtrados else productos[:5]  # fail-safe
     except Exception:
-        return productos
+        return productos[:5]
 
 
 # ---------------------------------------------------------------------------
