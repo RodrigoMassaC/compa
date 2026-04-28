@@ -154,12 +154,40 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             key=lambda x: x["precio_usd"] if x["precio_usd"] is not None else 9999
         )
 
-    # Ordenar productos por similitud y tomar los 8 más relevantes
-    resultado = sorted(todos.values(), key=lambda x: (x["ofertas"][0]["precio_usd"] if x["ofertas"] and x["ofertas"][0]["precio_usd"] else 9999))
-    for p in resultado:
-        del p["_sim"]
+    # Ordenar y diversificar por tienda para que el agente vea opciones de
+    # múltiples cadenas (no solo la dominante).
+    # 1) ranking principal: similitud alta + precio bajo
+    candidatos = sorted(
+        todos.values(),
+        key=lambda x: (
+            -(x["_sim"] or 0),  # mayor similitud primero
+            x["ofertas"][0]["precio_usd"] if x["ofertas"] and x["ofertas"][0]["precio_usd"] else 9999,
+        ),
+    )
 
-    return resultado[:5]
+    # 2) round-robin por tienda principal del producto: garantiza que aparezcan
+    # productos de distintas cadenas en los primeros resultados
+    por_tienda: dict[str, list[dict]] = {}
+    for p in candidatos:
+        if not p["ofertas"]:
+            continue
+        principal = p["ofertas"][0]["tienda"]
+        por_tienda.setdefault(principal, []).append(p)
+
+    resultado = []
+    while por_tienda and len(resultado) < 10:
+        for tienda in list(por_tienda.keys()):
+            if not por_tienda[tienda]:
+                del por_tienda[tienda]
+                continue
+            resultado.append(por_tienda[tienda].pop(0))
+            if len(resultado) >= 10:
+                break
+
+    for p in resultado:
+        p.pop("_sim", None)
+
+    return resultado
 
 
 def _normalizar_termino(s: str) -> str:

@@ -416,17 +416,46 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
         async with AsyncSessionLocal() as db:
             carrito = await calcular_carrito_optimo(items, db, client)
 
+        # Resumen DETALLADO con precios reales por producto y tienda.
+        # Sin esto el bot inventa los datos (alucina precios).
         ctx_nombre = f"El usuario se llama {nombre_usuario}. " if nombre_usuario else ""
         ctx_ciudad = f"Está en {ciudad_usuario}, Venezuela. " if ciudad_usuario else ""
-        resumen = f"{ctx_ciudad}{ctx_nombre}Lista del usuario: {', '.join(items)}\n\n"
+        resumen = (
+            f"{ctx_ciudad}{ctx_nombre}\n"
+            f"Lista solicitada: {', '.join(items)}\n"
+            f"Total de items: {carrito['total_items']}\n\n"
+            f"=== DESGLOSE DE PRECIOS REALES POR TIENDA ===\n"
+            f"(USA EXACTAMENTE ESTOS NÚMEROS, NO LOS INVENTES NI REDONDEES)\n\n"
+        )
         for t in carrito["tiendas"]:
-            resumen += f"- {t['tienda']}: ${t['total_usd']:.2f} ({t['items_encontrados']}/{carrito['total_items']} productos)\n"
+            resumen += (
+                f"### {t['tienda']} — {t['items_encontrados']}/{carrito['total_items']} productos | "
+                f"Total: ${t['total_usd']:.2f} USD (Bs {t['total_ves']:.2f})\n"
+            )
+            for it in t["items"]:
+                if it.get("disponible"):
+                    p_usd = it.get("precio_usd")
+                    p_ves = it.get("precio_ves")
+                    nombre = it.get("nombre") or "-"
+                    presentacion = it.get("presentacion", "")
+                    extra = f" {presentacion}" if presentacion else ""
+                    resumen += (
+                        f"  - {it['buscado']} → {nombre}{extra}: "
+                        f"${p_usd:.2f} USD (Bs {p_ves:.2f})\n"
+                    )
+                else:
+                    resumen += f"  - {it['buscado']} → NO DISPONIBLE en esta tienda\n"
+            resumen += "\n"
+
         if carrito.get("ahorro_maximo_usd"):
-            resumen += f"\nAhorro máximo posible: ${carrito['ahorro_maximo_usd']:.2f}"
+            resumen += (
+                f"AHORRO entre tiendas con lista completa: "
+                f"${carrito['ahorro_maximo_usd']:.2f} USD\n"
+            )
 
         respuesta_carrito = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=400,
+            max_tokens=800,
             system=CART_SYSTEM,
             messages=[{"role": "user", "content": resumen}],
         )
