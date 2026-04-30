@@ -143,7 +143,7 @@ async def check_monthly_limit(
                 status_code=429,
                 detail=(
                     f"Alcanzaste el límite de {effective_limit} consultas este mes. "
-                    f"{'Puedes comprar más consultas en compa.com.ve/consultas.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
+                    f"{'Puedes comprar más consultas en compa-ra.com/consultas.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
                 ),
                 headers={
                     "X-RateLimit-Limit": str(effective_limit),

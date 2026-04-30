@@ -39,6 +39,47 @@ def _generar_password_temporal() -> str:
     return f"Compa#{parte}"
 
 
+def _parse_fecha_nacimiento(s: str) -> str | None:
+    """Parsea fecha en formatos DD/MM/AAAA, DD-MM-AAAA, DD MM AAAA, AAAA-MM-DD.
+    Retorna ISO YYYY-MM-DD o None si no es válida o el usuario sería <13 o >110.
+    """
+    import re
+    s = s.strip()
+    # Normalizar separadores a "-"
+    s = re.sub(r"[\s/.]+", "-", s)
+    parts = s.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+
+    # Detectar orden: si primero tiene 4 dígitos es ISO, si último tiene 4 es DD-MM-YYYY
+    if len(parts[0]) == 4:
+        year, month, day = nums
+    elif len(parts[2]) == 4:
+        day, month, year = nums
+    else:
+        # Año con 2 dígitos — interpretar como 19xx o 20xx
+        day, month, year = nums
+        year = 2000 + year if year < 30 else 1900 + year
+
+    try:
+        from datetime import date as _date
+        fecha = _date(year, month, day)
+    except ValueError:
+        return None
+
+    # Sanity check: edad razonable (13-110 años)
+    from datetime import date as _date2
+    edad = (_date2.today() - fecha).days // 365
+    if edad < 13 or edad > 110:
+        return None
+
+    return fecha.isoformat()
+
+
 async def _get_redis() -> aioredis.Redis:
     return aioredis.from_url(settings.redis_url, decode_responses=True)
 
@@ -97,11 +138,8 @@ async def _crear_usuario_whatsapp(datos: dict) -> str:
     password_temp = _generar_password_temporal()
     password_hash = get_password_hash(password_temp)
 
-    # Rango de edad → año de nacimiento aproximado
-    año_actual = datetime.now().year
-    rango_año = {"1": año_actual - 22, "2": año_actual - 30, "3": año_actual - 43, "4": año_actual - 55}
-    año_nac = rango_año.get(datos.get("edad", "2"), año_actual - 30)
-    fecha_nac = f"{año_nac}-06-15"
+    # Fecha de nacimiento ya viene en formato ISO desde la captura
+    fecha_nac = datos.get("fecha_nacimiento") or "1990-01-01"
 
     sexo_map = {"1": "M", "2": "F", "3": "OTRO"}
     sexo = sexo_map.get(datos.get("sexo", "3"), "OTRO")
@@ -181,24 +219,22 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
         await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
         return (
             "¡Hola! Soy *Compa* 🛒, tu asistente de precios en Venezuela.\n\n"
-            "Crea tu cuenta gratuita para guardar tu historial y listas de compras.\n"
-            "Son solo *4 preguntas rápidas* 😊\n\n"
-            "¿Empezamos? Responde *SÍ* para registrarte o *NO* para consultar sin cuenta."
+            "Para empezar necesitas una cuenta gratuita. Son solo *4 preguntas rápidas* 😊\n\n"
+            "¿Empezamos?"
         )
 
     # ── Confirmación ─────────────────────────────────────────────────────────
     if paso == "confirmacion":
-        if msg.upper() in ("SI", "SÍ", "S", "YES", "1", "DALE", "OK", "CLARO", "BUENO", "QUIERO"):
-            estado = {"paso": "nombre"}
-            await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
-            return "¡Perfecto! 👍\n\n*¿Cuál es tu nombre completo?*"
-        else:
-            # Registro obligatorio — insistir amablemente
+        # Detectar negativa explícita
+        if msg.upper() in ("NO", "N", "NEL", "NEGATIVO", "PARO", "CANCELAR"):
             return (
-                "Para usar Compa necesitas una cuenta gratuita 😊\n"
-                "Solo son 4 preguntas rápidas y listo.\n\n"
-                "¿Empezamos? Responde *SÍ*"
+                "Para usar Compa necesitas una cuenta gratuita 😊\n\n"
+                "Cuando quieras empezar, escríbeme cualquier cosa y arrancamos."
             )
+        # Cualquier otra respuesta arranca el flujo (más natural — no exigir SÍ literal)
+        estado = {"paso": "nombre"}
+        await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
+        return "¡Perfecto! 👍\n\n*¿Cuál es tu nombre completo?*"
 
     # ── Completado → agente directo ───────────────────────────────────────────
     if paso == "completado":
@@ -231,23 +267,23 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
         if len(msg) < 3:
             return "Por favor escribe el nombre de tu ciudad."
         estado["ciudad"] = msg.title()
-        estado["paso"] = "edad"
+        estado["paso"] = "fecha_nac"
         await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
         return (
             f"¡{estado['ciudad']}! 📍\n\n"
-            "*¿Cuál es tu rango de edad?*\n\n"
-            "1️⃣  18 – 25 años\n"
-            "2️⃣  26 – 35 años\n"
-            "3️⃣  36 – 50 años\n"
-            "4️⃣  50+ años\n\n"
-            "_Responde con el número (1, 2, 3 ó 4)_"
+            "*¿Cuál es tu fecha de nacimiento?*\n"
+            "_Formato: DD/MM/AAAA. Ej: 15/03/1990_"
         )
 
-    # ── Edad ──────────────────────────────────────────────────────────────────
-    if paso == "edad":
-        if msg not in ("1", "2", "3", "4"):
-            return "Responde solo con 1, 2, 3 ó 4 según tu rango."
-        estado["edad"] = msg
+    # ── Fecha de nacimiento ──────────────────────────────────────────────────
+    if paso == "fecha_nac":
+        fecha_iso = _parse_fecha_nacimiento(msg)
+        if not fecha_iso:
+            return (
+                "No reconocí esa fecha. Por favor escríbela como *DD/MM/AAAA*.\n"
+                "_Ej: 15/03/1990_"
+            )
+        estado["fecha_nacimiento"] = fecha_iso
         estado["paso"] = "sexo"
         await redis.setex(key, REGISTRO_TTL, json.dumps(estado))
         return (
@@ -270,7 +306,7 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
             "🔒 Tus datos son confidenciales y no se comparten con terceros\n"
             "📋 Los usamos solo para mejorar el servicio\n"
             "✏️ Puedes pedir acceso, corrección o eliminación de tus datos\n\n"
-            "Lee los términos completos en: *compa.com.ve/terminos*\n\n"
+            "Lee los términos completos en: *compa-ra.com/terminos*\n\n"
             "¿Aceptas? Responde *SÍ* para crear tu cuenta o *NO* para cancelar."
         )
 
@@ -299,7 +335,7 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
                 await redis.setex(key, HISTORY_TTL, json.dumps({"paso": "completado"}))
                 return (
                     "ℹ️ Este número ya tiene una cuenta en Compa.\n"
-                    "Ingresa a *compa.com.ve* con tu email y contraseña.\n\n"
+                    "Ingresa a *compa-ra.com* con tu email y contraseña.\n\n"
                     "¿Qué precio estás buscando? 🛒"
                 )
             raise
@@ -311,7 +347,7 @@ async def _manejar_registro(redis: aioredis.Redis, phone: str, mensaje: str) -> 
             f"✅ *¡Listo, {nombre}! Tu cuenta está creada.*\n\n"
             f"📧 *Email:* {estado['email']}\n"
             f"🔑 *Contraseña temporal:* `{password_temp}`\n\n"
-            f"⚠️ Por seguridad, entra a *compa.com.ve*, inicia sesión y cambia tu contraseña.\n\n"
+            f"⚠️ Por seguridad, entra a *compa-ra.com*, inicia sesión y cambia tu contraseña.\n\n"
             f"---\n\n"
             f"Ya puedes usar Compa 🛒 Escríbeme:\n"
             f"• Un *producto* para ver precios (ej: _acetaminofén, leche_)\n"
@@ -532,7 +568,7 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
                 await send_text_message(phone, (
                     f"⚠️ Alcanzaste el límite de consultas de este mes.\n\n"
                     f"El contador se reinicia en {dias_restantes} días.\n"
-                    f"Para consultas ilimitadas, mejora tu plan en *compa.com.ve* 🚀"
+                    f"Para consultas ilimitadas, mejora tu plan en *compa-ra.com* 🚀"
                 ))
                 return
 

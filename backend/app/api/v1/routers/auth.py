@@ -313,7 +313,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     # Enviar email via Resend
     reset_url = f"http://localhost:3000/auth/reset-password?token={token}"
     if settings.env == "production":
-        reset_url = f"https://app.compa.com.ve/auth/reset-password?token={token}"
+        reset_url = f"https://compa-ra.com/auth/reset-password?token={token}"
 
     await _send_reset_email(body.email, row["nombre_completo"], reset_url)
     logger.info("forgot_password | email=%s token generado", body.email)
