@@ -593,48 +593,44 @@ REGLAS DE PRESENTACIÓN:
    - "¿Es tu compra final o seguimos comparando?\""""
 
 
-CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. El usuario mandó una lista y quiere saber dónde le sale más barata.
+CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. Recibes un desglose pre-procesado y respondes con un mensaje COMPACTO para WhatsApp.
 
-REGLA #0 — INVIOLABLE — PRECIOS Y NÚMEROS:
-- Recibes un DESGLOSE con precios reales USD y Bs por producto y por tienda.
-- USA TEXTUALMENTE esos números. No recalcules, no redondees distinto, no conviertas USD↔Bs por tu cuenta.
-- Si dice "$2.45 USD (Bs 1187.93)" → cópialo así. PROHIBIDO inventar.
+REGLA #0 — INVIOLABLE — PRECIOS:
+- Usa TEXTUALMENTE los números del desglose. Nunca recalcules ni conviertas. Cópialos tal cual.
 
-REGLA #1 — RESPUESTA COMPACTA (WhatsApp corta a ~4000 chars):
-- Sé BREVE. Mensaje total máximo ~25 líneas, ~2500 caracteres.
-- Solo detalla las **TOP 3 tiendas** ordenadas por más completitud + menor precio.
-- Tiendas con 1 solo producto: una línea resumen sin bullets.
-- NO repitas "NO disponible en esta tienda" para los productos que faltan — solo cuenta items disponibles ("3 de 4 productos").
+REGLA #1 — LÍMITE DE LONGITUD:
+- WhatsApp corta a ~4000 chars. Tu mensaje DEBE ir bajo ~2200 caracteres.
+- El desglose YA viene filtrado a TOP 3 tiendas con sus items disponibles. No agregues nada que no esté en el desglose.
+- Para "Otras tiendas (resumen)" usa una sola línea agrupada al final, NO repitas item por item.
 
-REGLA #2 — DETALLE EN LAS TOP 3:
-- Por cada producto disponible, una línea: `<buscado>: <Nombre + presentación> — $X (Bs Y)`.
-- Usa el nombre del desglose (con marca y presentación), NO el genérico del usuario.
+REGLA #2 — FORMATO OBLIGATORIO (sigue exactamente esta estructura):
 
-FORMATO OBLIGATORIO:
-
-```
-**<Tienda líder>** — *N de N* | $X.XX (Bs XX,XX)
+*<Tienda líder>* — *M de N* | $X.XX (Bs X.XXX,XX)
 • <buscado>: <Nombre+presentación> — $A (Bs aa)
 • <buscado>: <Nombre+presentación> — $B (Bs bb)
 
-**<Tienda 2>** — *M de N* | $Y.YY (Bs YY)
+*<Tienda 2>* — *M de N* | $Y.YY (Bs Y.YYY,YY)
 • <buscado>: <Nombre+presentación> — $C (Bs cc)
 
-**<Tienda 3>** — *K de N* | $Z.ZZ (Bs ZZ)
+*<Tienda 3>* — *M de N* | $Z.ZZ (Bs Z.ZZZ,ZZ)
 • <buscado>: <Nombre+presentación> — $D (Bs dd)
 
-_Otras: <Tienda4> (1/N), <Tienda5> (1/N) — más limitadas._
+_Otras: <T4> (X/N — $YY), <T5> (X/N — $YY)_
 
-💰 Ahorras $X.XX en <Tienda líder> vs <más cara>.
+(si hay "Items NO disponibles en ninguna tienda" en el desglose:)
+⚠️ No encontré: <items>
 
-¿Es tu compra final o agregas algo más?
-```
+💰 Ahorras $X.XX comprando en <Tienda líder>.
+¿Compra final o agregas algo?
 
-Reglas adicionales:
+REGLA #3 — DETALLES:
+- Cada bullet "•": un solo producto en UNA línea. Sin saltos extra. Usa el nombre+presentación del desglose, NO el genérico.
+- Sin headers tipo "📋 Comparativa de precios". Empieza directo con la tienda líder.
+- NO incluyas "NO disponible" línea por línea — el conteo "M/N" ya lo dice.
+- Usa asteriscos simples *así* para negritas (formato WhatsApp), no **dobles**.
+- Sin emojis excesivos. Solo ⚠️ y 💰 al final cuando aplique.
 - NO sugieras tiendas externas (Makro, Día, etc.).
-- Sin "📋 Comparativa", sin headers innecesarios. Empieza directo con la tienda líder.
-- Sin emojis excesivos. Solo 💰 al final si hay ahorro.
-- Tono profesional, español venezolano natural."""
+- Tono natural venezolano."""
 
 
 # ---------------------------------------------------------------------------
@@ -798,16 +794,20 @@ async def chat(
 
         carrito = await calcular_carrito_optimo(items, db, client)
 
-        # Construir el resumen DETALLADO con TODOS los precios reales por producto.
-        # CRÍTICO: el bot debe usar exactamente estos números, NO inventarlos.
-        # Si solo le pasamos totales, alucina los precios por producto.
+        # Resumen COMPACTO para que la respuesta no exceda el límite de WhatsApp.
+        # Estrategia:
+        # - TOP 3 tiendas con desglose completo (solo items DISPONIBLES, sin "NO disponible")
+        # - Otras tiendas en una línea-resumen (X/N items, $total)
+        # - El bot recibe los números exactos y solo transcribe.
+        tiendas_top = carrito["tiendas"][:3]
+        tiendas_resto = carrito["tiendas"][3:]
+
         resumen = (
-            f"Lista solicitada por el usuario: {', '.join(items)}\n"
-            f"Total de items pedidos: {carrito['total_items']}\n\n"
-            f"=== DESGLOSE DE PRECIOS REALES POR TIENDA ===\n"
-            f"(USA EXACTAMENTE ESTOS NÚMEROS, NO LOS INVENTES NI REDONDEES MÁS)\n\n"
+            f"Lista solicitada: {', '.join(items)}\n"
+            f"Total items: {carrito['total_items']}\n\n"
+            f"=== TOP 3 TIENDAS (usar EXACTAMENTE estos números) ===\n\n"
         )
-        for t in carrito["tiendas"]:
+        for t in tiendas_top:
             resumen += (
                 f"### {t['tienda']} — {t['items_encontrados']}/{carrito['total_items']} productos | "
                 f"Total: ${t['total_usd']:.2f} USD (Bs {t['total_ves']:.2f})\n"
@@ -820,16 +820,35 @@ async def chat(
                     presentacion = it.get("presentacion", "")
                     extra = f" {presentacion}" if presentacion else ""
                     resumen += (
-                        f"  - {it['buscado']} → {nombre}{extra}: "
+                        f"  - {it['buscado']}: {nombre}{extra} — "
                         f"${p_usd:.2f} USD (Bs {p_ves:.2f})\n"
                     )
-                else:
-                    resumen += f"  - {it['buscado']} → NO DISPONIBLE en esta tienda\n"
+                # NOTA: omitimos los "no disponible" — el conteo M/N ya lo expresa.
             resumen += "\n"
+
+        if tiendas_resto:
+            resumen += "=== Otras tiendas (resumen) ===\n"
+            for t in tiendas_resto:
+                resumen += (
+                    f"- {t['tienda']}: {t['items_encontrados']}/{carrito['total_items']} | "
+                    f"${t['total_usd']:.2f} USD\n"
+                )
+            resumen += "\n"
+
+        # Items que NO se encontraron en ninguna tienda (informarlo al bot)
+        items_sin_tienda = []
+        for item in items:
+            if not any(
+                next((it for it in t["items"] if it["buscado"] == item and it.get("disponible")), None)
+                for t in carrito["tiendas"]
+            ):
+                items_sin_tienda.append(item)
+        if items_sin_tienda:
+            resumen += f"Items NO disponibles en ninguna tienda: {', '.join(items_sin_tienda)}\n"
 
         if carrito["ahorro_maximo_usd"]:
             resumen += (
-                f"AHORRO entre tiendas con lista completa: "
+                f"AHORRO máximo (lista completa): "
                 f"${carrito['ahorro_maximo_usd']:.2f} USD\n"
             )
 
