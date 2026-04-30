@@ -567,6 +567,19 @@ Cada item: nombre limpio del producto en 1-3 palabras. Ejemplos:
 - "carrito: harina, aceite, azúcar, pasta" → {"accion": "lista", "items": ["harina", "aceite", "azúcar", "pasta"]}
 - "dónde me sale más barato comprar todo: leche y arroz" → {"accion": "lista", "items": ["leche", "arroz"]}
 
+⚠️ AJUSTES A LISTA EXISTENTE — REGLA CRÍTICA:
+Si en el historial reciente HAY UNA LISTA y el usuario quiere CORREGIR/CAMBIAR/AGREGAR/QUITAR uno o más items, debes regenerar la LISTA COMPLETA con el cambio aplicado. NO generes solo el item modificado.
+
+Ejemplos:
+- Historial: lista=[leche, arroz, jabón]. Usuario dice: "la leche que sea Pastoreña deslactosada"
+  → {"accion": "lista", "items": ["leche Pastoreña deslactosada", "arroz", "jabón"]}
+- Historial: lista=[cebolla, tomate, leche]. Usuario dice: "quita la leche, agrega papas"
+  → {"accion": "lista", "items": ["cebolla", "tomate", "papas"]}
+- Historial: lista=[omeprazol, loratadina]. Usuario dice: "el omeprazol de 20 mg"
+  → {"accion": "lista", "items": ["omeprazol 20 mg", "loratadina"]}
+
+Solo usa "buscar" si el usuario claramente pregunta por UN producto independiente, sin referencia a una lista activa.
+
 3. Si es saludo, agradecimiento o pregunta general sin producto específico:
 {"accion": "conversar", "respuesta": "respuesta breve y amigable"}"""
 
