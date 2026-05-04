@@ -472,6 +472,103 @@ def _prefiltro_substring(productos: list[dict], terminos: list[str]) -> list[dic
     return resultado if resultado else productos
 
 
+# Mapeo de presentaciones equivalentes (para que "cápsulas" no matchee con "ampolla")
+PRESENTACION_GROUPS = {
+    "oral_solido": {"cápsula", "capsula", "cápsulas", "capsulas", "comprimido",
+                    "comprimidos", "tableta", "tabletas", "pastilla", "pastillas", "píldora"},
+    "oral_liquido": {"jarabe", "suspensión", "suspension", "solución oral",
+                     "gotas orales", "elixir"},
+    "inyectable":   {"ampolla", "ampollas", "vial", "viales", "inyectable",
+                     "inyección", "i.v.", "i.m.", "iv", "im"},
+    "topico":       {"crema", "ungüento", "unguento", "gel", "loción", "locion",
+                     "pomada", "spray cutáneo"},
+    "ocular":       {"gotas oftálmicas", "colirio", "gotas oculares"},
+    "envase_polvo": {"polvo", "polvos"},
+    "envase_carton": {"cartón", "carton", "tetrapack", "tetra pak", "tetra-pak"},
+    "envase_botella": {"botella", "botellón", "frasco", "envase pet"},
+    "envase_lata":   {"lata", "enlatado", "enlatada"},
+    "envase_sobre":  {"sobre", "sobres", "sachet", "sachets", "sobrecito"},
+}
+
+
+def _grupo_presentacion(texto: str) -> str | None:
+    """Detecta el grupo de presentación al que pertenece un texto."""
+    t = texto.lower()
+    for grupo, aliases in PRESENTACION_GROUPS.items():
+        for alias in aliases:
+            if alias in t:
+                return grupo
+    return None
+
+
+def _aplicar_filtros(productos: list[dict], filtros: dict) -> list[dict]:
+    """
+    Aplica filtros estructurados (marca, presentación, dosis, atributos) a la
+    lista de productos. Si después de filtrar no queda nada, retorna la lista
+    original (fail-safe — mejor mostrar opciones aproximadas que ninguna).
+    """
+    if not filtros:
+        return productos
+
+    marca_q = (filtros.get("marca") or "").strip().lower()
+    presentacion_q = (filtros.get("presentacion") or "").strip().lower()
+    atributos_q = [a.strip().lower() for a in (filtros.get("atributos") or []) if a]
+    dosis_q = filtros.get("dosis_mg")
+    envase_q = (filtros.get("tipo_envase") or "").strip().lower()
+
+    grupo_pres_q = _grupo_presentacion(presentacion_q) if presentacion_q else None
+    grupo_env_q = _grupo_presentacion(envase_q) if envase_q else None
+
+    filtrados = []
+    for p in productos:
+        nombre = (p.get("nombre") or "").lower()
+        marca = (p.get("marca") or "").lower()
+        presentacion = (p.get("presentacion") or "").lower()
+        haystack = f"{nombre} {marca} {presentacion}"
+
+        # Marca: si el usuario la especificó, debe aparecer en nombre/marca
+        if marca_q and marca_q not in haystack:
+            continue
+
+        # Presentación (forma farmacéutica/envase del producto):
+        # bloquea si el usuario pidió un grupo y el producto está en grupo distinto
+        if grupo_pres_q:
+            grupo_pres_p = _grupo_presentacion(haystack)
+            if grupo_pres_p and grupo_pres_p != grupo_pres_q:
+                continue
+
+        # Tipo de envase (cartón vs polvo, etc.) — mismo principio
+        if grupo_env_q:
+            grupo_env_p = _grupo_presentacion(haystack)
+            if grupo_env_p and grupo_env_p != grupo_env_q:
+                continue
+
+        # Atributos modificadores (deslactosada, sin azúcar, light, etc.)
+        # Si el usuario los pidió, deben estar en el producto
+        if atributos_q:
+            faltantes = [a for a in atributos_q if a not in haystack]
+            if faltantes:
+                continue
+
+        # Dosis: aceptamos ±20% para tolerar redondeos en nombres
+        if dosis_q:
+            import re
+            mg_match = re.search(r"(\d+(?:[.,]\d+)?)\s*mg", haystack)
+            if mg_match:
+                try:
+                    mg_p = float(mg_match.group(1).replace(",", "."))
+                    if abs(mg_p - float(dosis_q)) / float(dosis_q) > 0.2:
+                        continue
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        filtrados.append(p)
+
+    # Fail-safe: si los filtros eliminaron TODO, mostramos los originales
+    # con una advertencia (el bot le dirá al usuario).
+    return filtrados if filtrados else productos
+
+
 async def filtrar_relevantes(
     productos: list[dict],
     terminos: list[str],
@@ -556,12 +653,43 @@ Tu única función es analizar el mensaje del usuario (considerando el historial
 Opciones de respuesta:
 
 1. Si el usuario pregunta por precios de UN producto específico:
-{"accion": "buscar", "terminos": ["término principal", "variante opcional"]}
+{
+  "accion": "buscar",
+  "terminos": ["término principal", "variante opcional"],
+  "filtros": {
+    "marca": null,
+    "presentacion": null,
+    "atributos": [],
+    "dosis_mg": null,
+    "tipo_envase": null
+  }
+}
 
-Los términos deben ser palabras clave en español, máximo 2-3 palabras cada uno.
-Genera variantes útiles. Ejemplos:
-- "leche" → ["leche", "leche entera", "leche en polvo"]
-- "acetaminofen" → ["acetaminofen", "paracetamol", "acetaminofén"]
+REGLAS DE TÉRMINOS:
+- Palabras clave en español, máximo 2-3 palabras cada uno.
+- Genera variantes útiles del producto base. Ejemplos:
+  - "leche" → ["leche", "leche entera"]
+  - "acetaminofen" → ["acetaminofen", "paracetamol"]
+
+REGLAS DE FILTROS — CRÍTICO PARA PRECISIÓN:
+Cuando el usuario menciona atributos específicos, EXTRÁELOS al objeto "filtros":
+- "marca": nombre de marca si lo menciona ("La Pastoreña", "Genven", "Heinz", etc.)
+- "presentacion": forma del producto si la menciona ("cartón", "polvo", "líquida", "ampolla", "cápsulas", "tabletas", "comprimidos", "jarabe", "suspensión", "gotas", "crema", "gel")
+- "atributos": características modificadoras ["deslactosada", "sin azúcar", "light", "diet", "integral", "orgánico", "infantil", "pediátrico", "extra", "forte"]
+- "dosis_mg": dosis en mg si la menciona ("32mg" → 32, "500mg" → 500). Para µg dejar 0. Solo número.
+- "tipo_envase": tamaño/cantidad si menciona específicamente ("1 lt", "500 ml", "x 30 tabletas", "x 12 unidades")
+
+EJEMPLOS:
+- "leche La Pastoreña deslactosada de 1 lt cartón"
+  → {"accion":"buscar","terminos":["leche","leche deslactosada"],"filtros":{"marca":"La Pastoreña","presentacion":"cartón","atributos":["deslactosada"],"dosis_mg":null,"tipo_envase":"1 lt"}}
+- "candesartan de 32 mg"
+  → {"accion":"buscar","terminos":["candesartan","candesartán"],"filtros":{"marca":null,"presentacion":null,"atributos":[],"dosis_mg":32,"tipo_envase":null}}
+- "amoxicilina 500 mg en cápsulas"
+  → {"accion":"buscar","terminos":["amoxicilina"],"filtros":{"marca":null,"presentacion":"cápsulas","atributos":[],"dosis_mg":500,"tipo_envase":null}}
+- "ketchup heinz"
+  → {"accion":"buscar","terminos":["ketchup","salsa de tomate"],"filtros":{"marca":"Heinz","presentacion":null,"atributos":[],"dosis_mg":null,"tipo_envase":null}}
+- "leche" (sin atributos)
+  → {"accion":"buscar","terminos":["leche","leche entera"],"filtros":{"marca":null,"presentacion":null,"atributos":[],"dosis_mg":null,"tipo_envase":null}}
 
 IMPORTANTE: Si el usuario dice "otra marca", "quiero otra", "hay más?", usa el historial para entender QUÉ producto buscaba y genera términos para ESE producto.
 
@@ -598,14 +726,24 @@ REGLA #0 — INVIOLABLE — PRECIOS Y NÚMEROS:
 - Si la oferta dice precio_usd: 2.45 y precio_ves: 1187.93, escribe "$2.45 USD (Bs 1187.93)". Punto.
 - Está PROHIBIDO inventar o calcular precios — solo transcribe.
 
-REGLAS DE PRESENTACIÓN:
+REGLA #1 — RESPETO DE FILTROS PEDIDOS POR EL USUARIO:
+Si el contexto dice "Filtros pedidos por el usuario: marca=X, presentación=Y, dosis=Zmg…":
+- Verifica que CADA producto que muestres cumpla con todos esos filtros.
+- Si NO encuentras exactamente lo pedido, dilo CLARO al inicio:
+  "No tengo *<lo pedido>* en este momento, pero te muestro alternativas similares:"
+- NUNCA muestres productos que claramente NO cumplen el filtro como si fueran el match (ej.: si pidió "cápsulas" no muestres "ampolla" como si fuera lo mismo).
+- Si pidió marca específica y solo hay otras marcas, ofrece las alternativas indicando "no tenemos *Marca X*, pero hay *Marca Y* con la misma presentación".
+- Si pidió "cartón" y solo hay "polvo", DILO antes de mostrar.
+- Si pidió "32 mg" y hay "16 mg" o "8 mg", muéstralos como alternativas pero advierte que la dosis es distinta.
+
+REGLAS GENERALES:
 1. NUNCA sugieras tiendas fuera de las de nuestra DB (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). Nunca menciones Makro, Día, Plan Suárez, etc.
 2. NUNCA digas "los precios pueden variar según ubicación".
-3. Cuando hay varias tiendas, compara y destaca la más económica.
+3. Cuando hay varias tiendas, compara y destaca la más económica (siempre que sean equivalentes en presentación y dosis).
 4. Si hay distintas marcas o presentaciones, menciónalas brevemente.
 5. Si NO hay resultados o son irrelevantes, dilo con claridad y pide más detalles. No inventes productos.
 6. Tono: amigable, profesional, español venezolano natural. Pocos emojis.
-7. Máximo 3–5 líneas.
+7. Máximo 5–7 líneas (con filtros puede crecer un poco).
 8. SIEMPRE cierra con una pregunta de continuación, ejemplos:
    - "¿Buscas otra marca o presentación?"
    - "¿Quieres añadir algo más a tu lista?"
@@ -742,6 +880,7 @@ async def chat(
     # --- Búsqueda de productos ---
     if accion == "buscar":
         terminos = clasificacion.get("terminos", [])
+        filtros = clasificacion.get("filtros") or {}
 
         # Fallback: si no hay términos, usar el mensaje directamente
         if not terminos:
@@ -750,7 +889,15 @@ async def chat(
         productos_encontrados = await buscar_en_db(terminos, db)
         # Capa 1: pre-filtro gratuito por substring
         productos_encontrados = _prefiltro_substring(productos_encontrados, terminos)
-        # Capa 2: validación semántica con Claude
+        # Capa 2 (NUEVA): filtros estructurados por marca/presentación/dosis/atributos
+        productos_filtrados = _aplicar_filtros(productos_encontrados, filtros)
+        filtros_aplicados = (
+            len(productos_filtrados) < len(productos_encontrados)
+            and bool(filtros)
+            and any(filtros.get(k) for k in ("marca", "presentacion", "atributos", "dosis_mg", "tipo_envase"))
+        )
+        productos_encontrados = productos_filtrados
+        # Capa 3: validación semántica con Claude
         productos_encontrados = await filtrar_relevantes(
             productos_encontrados, terminos, request.mensaje, client
         )
@@ -771,12 +918,33 @@ async def chat(
         ctx_ciudad = f"El usuario está en {ciudad_usuario}, Venezuela. " if ciudad_usuario else ""
         nombre_usuario = current_user.get("nombre_completo", "").split()[0] if current_user else ""
         ctx_nombre = f"Se llama {nombre_usuario}. " if nombre_usuario else ""
+
+        # Aviso al modelo sobre filtros aplicados — para que la respuesta sea precisa
+        filtros_str = ""
+        if filtros and any(filtros.get(k) for k in ("marca", "presentacion", "atributos", "dosis_mg", "tipo_envase")):
+            partes = []
+            if filtros.get("marca"):
+                partes.append(f"marca={filtros['marca']}")
+            if filtros.get("presentacion"):
+                partes.append(f"presentación={filtros['presentacion']}")
+            if filtros.get("atributos"):
+                partes.append(f"atributos={','.join(filtros['atributos'])}")
+            if filtros.get("dosis_mg"):
+                partes.append(f"dosis={filtros['dosis_mg']}mg")
+            if filtros.get("tipo_envase"):
+                partes.append(f"envase={filtros['tipo_envase']}")
+            filtros_str = (
+                f"\nFiltros pedidos por el usuario: {' | '.join(partes)}\n"
+                f"Si los productos mostrados NO coinciden con estos filtros, "
+                f"avísale al usuario que no encontraste el match exacto y muéstrale las alternativas más cercanas.\n"
+            )
+
         mensajes_respuesta.append({
             "role": "user",
             "content": (
                 f"{ctx_ciudad}{ctx_nombre}"
                 f"El usuario preguntó: \"{request.mensaje}\"\n\n"
-                f"Términos buscados: {', '.join(terminos)}\n\n"
+                f"Términos buscados: {', '.join(terminos)}{filtros_str}\n"
                 f"Resultados encontrados en la base de datos:\n{resultados_str}\n\n"
                 f"Responde de forma útil y directa siguiendo las reglas del sistema."
             )
