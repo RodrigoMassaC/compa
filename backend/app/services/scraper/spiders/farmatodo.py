@@ -116,9 +116,9 @@ class FarmatodoDetailSpider(BaseSpider):
     REDIS_DONE = "farmatodo:done"
 
     # Configuración de concurrencia
-    # ⚠️  Cada navegador Playwright consume ~500% CPU. Mantén CONCURRENCY ≤ 2
-    # en VPS de 2 vCPU para no saturar.
-    CONCURRENCY = 2
+    # ⚠️  En VPS de 2 vCPU mantén CONCURRENCY=1 (1 navegador Chromium ya
+    # consume ~200% CPU). Si se sube a 4+ vCPU se puede aumentar.
+    CONCURRENCY = 1
     DELAY_MIN = 1.5
     DELAY_MAX = 3.0
 
