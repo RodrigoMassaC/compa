@@ -22,7 +22,9 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     worker_prefetch_multiplier=1,
-    worker_concurrency=2,
+    # ⚠️  VPS de 2 vCPU: solo 1 tarea pesada a la vez (los spiders Playwright
+    # son CPU-intensivos). Si subes a 2, dos spiders concurrentes saturan el VPS.
+    worker_concurrency=1,
     task_acks_late=True,
     beat_schedule={
         # ── Tasa BCV cada hora ──────────────────────────────────────────────

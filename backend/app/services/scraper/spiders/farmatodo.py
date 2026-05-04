@@ -116,9 +116,11 @@ class FarmatodoDetailSpider(BaseSpider):
     REDIS_DONE = "farmatodo:done"
 
     # Configuración de concurrencia
-    CONCURRENCY = 4
-    DELAY_MIN = 0.5
-    DELAY_MAX = 1.5
+    # ⚠️  Cada navegador Playwright consume ~500% CPU. Mantén CONCURRENCY ≤ 2
+    # en VPS de 2 vCPU para no saturar.
+    CONCURRENCY = 2
+    DELAY_MIN = 1.5
+    DELAY_MAX = 3.0
 
     def __init__(self, max_products: Optional[int] = None):
         super().__init__()
