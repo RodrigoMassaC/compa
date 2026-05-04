@@ -202,26 +202,43 @@ class NormalizadorIA:
     async def _buscar_o_crear_maestro(self, datos: dict, nombre_original: str) -> UUID:
         id_categoria = CATEGORIAS[datos["categoria"]]
         nombre_estandar = datos["nombre_estandar"]
+        marca_nueva = (datos.get("marca") or "").strip().lower()
+        presentacion_nueva = (datos.get("presentacion") or "").strip().lower()
 
         async with self.AsyncSession() as session:
-            # Buscar por similitud usando índice GIN (trigrams)
+            # Buscar por similitud usando índice GIN (trigrams).
+            # Comparamos también marca y presentación: dos productos solo se
+            # consideran el mismo si comparten nombre Y marca Y presentación.
             result = await session.execute(text("""
-                SELECT id_producto_maestro, nombre_estandar
+                SELECT id_producto_maestro, nombre_estandar, marca, presentacion
                 FROM productos_maestros
                 WHERE nombre_estandar % :nombre
                   AND id_categoria = :id_cat
                 ORDER BY similarity(nombre_estandar, :nombre) DESC
-                LIMIT 1
+                LIMIT 5
             """), {"nombre": nombre_estandar, "id_cat": id_categoria})
-            existente = result.fetchone()
+            existentes = result.fetchall()
 
-            if existente:
+            for existente in existentes:
                 sim_result = await session.execute(text("""
                     SELECT similarity(:a, :b) as sim
                 """), {"a": nombre_estandar, "b": existente.nombre_estandar})
                 sim = sim_result.scalar()
 
-                if sim >= 0.6:
+                # Threshold subido a 0.85 (antes 0.6 era muy permisivo).
+                # Y exigimos que marca + presentación coincidan también.
+                marca_existe = (existente.marca or "").strip().lower()
+                presentacion_existe = (existente.presentacion or "").strip().lower()
+                marcas_coinciden = (
+                    not marca_nueva or not marca_existe or marca_nueva == marca_existe
+                )
+                presentaciones_coinciden = (
+                    not presentacion_nueva
+                    or not presentacion_existe
+                    or presentacion_nueva == presentacion_existe
+                )
+
+                if sim >= 0.85 and marcas_coinciden and presentaciones_coinciden:
                     logger.debug(f"Match encontrado (sim={sim:.2f}): '{existente.nombre_estandar}'")
                     return existente.id_producto_maestro
 

@@ -150,6 +150,17 @@ class FarmatodoPriceSpider(BaseSpider):
             precio = _parse_precio(precio_raw)
             if precio is None:
                 self.logger.warning(f"  ⚠️  No se pudo parsear '{precio_raw}' → {url}")
+                return None
+
+            # Filtro placeholder: Farmatodo muestra "Bs. 0,01" cuando un producto
+            # no tiene precio en línea (agotado/sin disponibilidad). Lo descartamos
+            # para no contaminar la DB con precios irreales.
+            if precio < Decimal("1"):
+                self.logger.warning(
+                    f"  ⚠️  Precio placeholder detectado ({precio} Bs) — descartado: {url}"
+                )
+                return None
+
             return precio
 
         except Exception as e:

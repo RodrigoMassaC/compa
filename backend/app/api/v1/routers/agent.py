@@ -72,6 +72,12 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                 FROM historial_precios hp
                 JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
                 JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+                WHERE NOT (
+                    -- filtra precios placeholder (Bs. 0,01 de Farmatodo cuando
+                    -- la página no tiene precio listado; o USD < 0.05)
+                    (hp.moneda_origen = 'VES' AND hp.precio_bruto < 1)
+                    OR (hp.moneda_origen = 'USD' AND hp.precio_bruto < 0.05)
+                )
                 ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
             ),
             candidatos AS (

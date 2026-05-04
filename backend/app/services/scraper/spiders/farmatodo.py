@@ -270,6 +270,16 @@ class FarmatodoDetailSpider(BaseSpider):
                 # Parsear precio VES
                 precio_decimal = self._parse_precio_ves(precio_raw)
 
+                # Filtro placeholder: Farmatodo muestra "Bs. 0,01" cuando el
+                # producto no tiene precio listado (agotado/no disponible).
+                # Lo descartamos para no contaminar la DB.
+                if precio_decimal is None or precio_decimal < Decimal("1"):
+                    self.logger.warning(
+                        f"⚠️  Precio placeholder ({precio_decimal} Bs) — descartado: {url}"
+                    )
+                    await page.close()
+                    return None
+
                 producto = ScrapedProduct(
                     nombre_original=nombre,
                     precio_bruto=precio_decimal,
