@@ -79,23 +79,34 @@ REGLAS CRÍTICAS:
    - "Aceite Iberia Extra Virgen 500ml" → marca="Iberia"
    - NUNCA mezcles marcas. Si hay duda, marca=null mejor que asumir.
 
-3. nombre_estandar DEBE incluir marca + presentación.
+3. nombre_estandar DEBE incluir marca + presentación + variante distintiva.
    - ✅ "Capri Aceite de Oliva Extra Virgen 500 ml"
-   - ✅ "Iberia Aceite de Oliva Extra Virgen 500 ml"
+   - ✅ "Mon Reve Labial Humectante 771"  ← preserva el código de tono
+   - ✅ "Mon Reve Labial Matte 04"  ← preserva el código de tono
    - ❌ "Aceite de Oliva Extra Virgen" (sin marca ni gramaje)
+   - ❌ "Mon Reve Labial Humectante" (sin tono)
 
-4. Capitaliza correctamente. Sin MAYÚSCULAS COMPLETAS.
+4. CÓDIGOS DE TONO / VARIANTE / MODELO:
+   Si el nombre original tiene un código numérico (771, 04, 16, etc.) o de tono
+   (Stylish, Exquisite, Cool Mint, Frutilla), SIEMPRE inclúyelo en nombre_estandar.
+   Esos códigos identifican variantes que son productos DISTINTOS:
+   - "Mon Reve Labial 771" y "Mon Reve Labial 772" son productos DIFERENTES
+   - "Revlon Quad Stylish" y "Revlon Quad Exquisite" son productos DIFERENTES
 
-5. Normaliza unidades:
+5. DOSIS COMBINADAS — preserva TODAS las dosis del nombre original:
+   - "Crisomet 50mg/500mg x 30 tab" → nombre_estandar="Crisomet 50 mg / 500 mg x 30 tabletas"
+   - "Crisomet 50mg/850mg x 30 tab" → nombre_estandar="Crisomet 50 mg / 850 mg x 30 tabletas"
+   - Estos son productos DIFERENTES — preserva ambas dosis siempre.
+   - "Coropres H 8mg/12.5mg" y "Coropres H 16mg/12.5mg" son DIFERENTES.
+
+6. Capitaliza correctamente. Sin MAYÚSCULAS COMPLETAS.
+
+7. Normaliza unidades:
    - GR/Gr → "g"
    - ML/Ml → "ml"
    - KG/Kg → "kg"
    - LT/Lt → "l"
    - UN/Und → "un"
-
-6. Para medicamentos preserva DOSIS + cantidad de unidades:
-   - "Omeprazol 20 mg x 14 cápsulas" → presentacion="20 mg x 14 cápsulas"
-   - gramaje_valor=14, gramaje_unidad="cápsulas"
 
 EJEMPLOS:
 
@@ -188,6 +199,41 @@ def extraer_gramaje(texto: str) -> Optional[Tuple[float, str]]:
 
     unidad = UNIDAD_NORMALIZADA.get(unidad_raw.lower(), unidad_raw.lower())
     return valor, unidad
+
+
+def extraer_todas_dosis(texto: str) -> set:
+    """
+    Extrae TODAS las dosis (valor, unidad) del texto como un set.
+    Útil para distinguir productos con combinaciones distintas como:
+    'Coropres H 8mg/12.5mg' vs '16mg/12.5mg' vs '32mg/12.5mg'.
+    """
+    matches = GRAMAJE_RE.findall(texto or "")
+    dosis = set()
+    for valor_str, unidad_raw in matches:
+        try:
+            v = float(valor_str.replace(",", "."))
+        except ValueError:
+            continue
+        u = UNIDAD_NORMALIZADA.get(unidad_raw.lower(), unidad_raw.lower())
+        dosis.add((round(v, 3), u))
+    return dosis
+
+
+# Detecta sufijos de tono/variante: número de 2-4 dígitos al final del nombre,
+# o códigos como "Matte 04", "Quad Stylish", etc.
+SUFIJO_VARIANTE_RE = re.compile(r"\b(\d{2,4}|[IVX]{1,4})\b\s*$", re.IGNORECASE)
+
+
+def extraer_sufijo_variante(nombre: str) -> Optional[str]:
+    """
+    Detecta un código de tono/variante al final del nombre.
+    Ejemplos:
+      'Mon Reve Labial Humectante 771' → '771'
+      'Revlon Quad Exquisite' → None (palabra no numérica)
+      'Mon Reve Matte 04' → '04'
+    """
+    m = SUFIJO_VARIANTE_RE.search((nombre or "").strip())
+    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -388,23 +434,26 @@ class NormalizadorIA:
         """
         Busca un producto maestro EXISTENTE compatible. Si no existe, crea uno.
 
-        Reglas de compatibilidad estrictas — dos productos solo se considera
-        el mismo maestro si:
+        Reglas de compatibilidad ESTRICTAS — dos productos solo son el mismo
+        maestro si:
           - misma categoría
-          - misma marca (case-insensitive, exacta)
-          - mismo gramaje_valor (con tolerancia <5%)
-          - misma gramaje_unidad
-          - similarity de nombre >= 0.85
+          - misma marca (exacta)
+          - el SET completo de dosis (todas las mg/ml) coincide
+          - mismo sufijo de tono/variante numérico (si aplica)
+          - similarity nombre_estandar >= 0.92
         """
         id_categoria = CATEGORIAS[datos["categoria"]]
         nombre_estandar = datos["nombre_estandar"]
         marca_nueva = (datos.get("marca") or "").strip().lower()
         presentacion_nueva = (datos.get("presentacion") or "").strip().lower()
-        gramaje_valor = datos.get("gramaje_valor")
-        gramaje_unidad = (datos.get("gramaje_unidad") or "").strip().lower()
+
+        # Set completo de dosis del nuevo producto (todas las mg/ml/g del nombre+pres)
+        dosis_nuevas = extraer_todas_dosis(nombre_original) | extraer_todas_dosis(presentacion_nueva)
+
+        # Sufijo numérico de tono/variante (771, 04, etc.)
+        sufijo_nuevo = extraer_sufijo_variante(nombre_estandar) or extraer_sufijo_variante(nombre_original)
 
         async with self.AsyncSession() as session:
-            # Buscamos candidatos por similaridad de nombre + categoría
             result = await session.execute(text("""
                 SELECT id_producto_maestro, nombre_estandar, marca, presentacion
                 FROM productos_maestros
@@ -419,35 +468,41 @@ class NormalizadorIA:
                 marca_existe = (existente.marca or "").strip().lower()
                 presentacion_existe = (existente.presentacion or "").strip().lower()
 
-                # ── MARCA: si ambos tienen marca, deben ser iguales (exacto) ──
+                # ── MARCA: si ambos tienen marca, deben ser iguales ──
                 if marca_nueva and marca_existe and marca_nueva != marca_existe:
                     continue
 
-                # ── GRAMAJE: comparación por valor y unidad (no similarity) ──
-                gramaje_existe = extraer_gramaje(existente.presentacion or "") or \
-                                 extraer_gramaje(existente.nombre_estandar or "")
+                # ── DOSIS COMPLETAS: el set de mg/ml debe coincidir ──
+                # Ej: {(8, mg), (12.5, mg)} != {(16, mg), (12.5, mg)} → distinto
+                dosis_existe = (
+                    extraer_todas_dosis(existente.nombre_estandar or "")
+                    | extraer_todas_dosis(presentacion_existe)
+                )
+                if dosis_nuevas and dosis_existe and dosis_nuevas != dosis_existe:
+                    continue
 
-                if gramaje_valor and gramaje_existe:
-                    valor_e, unidad_e = gramaje_existe
-                    # Unidades distintas → producto distinto
-                    if gramaje_unidad and unidad_e and gramaje_unidad != unidad_e:
-                        continue
-                    # Tolerancia 5% (cubre redondeos como 70 vs 70.5)
-                    if abs(valor_e - gramaje_valor) / max(valor_e, gramaje_valor) > 0.05:
-                        continue
+                # ── SUFIJO DE TONO/VARIANTE: si ambos tienen, deben coincidir ──
+                # Ej: 'Mon Reve Labial 771' != 'Mon Reve Labial 772'
+                sufijo_existe = (
+                    extraer_sufijo_variante(existente.nombre_estandar or "")
+                    or extraer_sufijo_variante(presentacion_existe)
+                )
+                if sufijo_nuevo and sufijo_existe and sufijo_nuevo != sufijo_existe:
+                    continue
 
-                # ── SIMILARITY del nombre ≥ 0.85 ──
+                # ── SIMILARITY del nombre ≥ 0.92 (más estricto que antes) ──
                 sim_result = await session.execute(text("""
                     SELECT similarity(:a, :b) as sim
                 """), {"a": nombre_estandar, "b": existente.nombre_estandar})
                 sim = sim_result.scalar() or 0
 
-                if sim < 0.85:
+                if sim < 0.92:
                     continue
 
                 # Match
                 logger.debug(
-                    f"Match (sim={sim:.2f}, marca={marca_existe}): "
+                    f"Match (sim={sim:.2f}, marca={marca_existe}, "
+                    f"dosis={dosis_nuevas}, sufijo={sufijo_nuevo}): "
                     f"'{existente.nombre_estandar}'"
                 )
                 return existente.id_producto_maestro
