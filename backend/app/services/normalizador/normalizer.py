@@ -213,19 +213,29 @@ class _ClienteIA:
         else:
             raise ValueError(f"Provider desconocido: {provider}")
 
-    def chat(self, system: str, user: str, max_tokens: int = 400) -> str:
-        """Llamada bloqueante. Retorna el texto de respuesta."""
+    def chat(self, system: str, user: str, max_tokens: int = 800) -> str:
+        """Llamada bloqueante. Retorna el texto de respuesta.
+
+        Para DeepSeek usamos response_format=json_object para evitar que el
+        modelo incluya texto fuera del JSON. max_tokens=800 da margen para
+        productos con nombres largos (medicamentos compuestos, etc.).
+        """
         if self.provider == "deepseek":
-            resp = self.client.chat.completions.create(
+            kwargs = dict(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
                 max_tokens=max_tokens,
-                temperature=0.0,  # Determinístico para normalización
+                temperature=0.0,  # Determinístico
                 stream=False,
+                response_format={"type": "json_object"},  # JSON puro
             )
+            # Para deepseek-v4-* desactivamos thinking (no lo necesitamos)
+            if "v4" in self.model:
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = self.client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
         # anthropic
         resp = self.client.messages.create(
@@ -344,7 +354,7 @@ class NormalizadorIA:
                 self.client.chat,
                 SYSTEM_PROMPT,
                 USER_PROMPT_TEMPLATE.format(nombre=nombre),
-                400,
+                800,
             )
             raw = raw.strip().replace("```json", "").replace("```", "").strip()
             datos = json.loads(raw)
