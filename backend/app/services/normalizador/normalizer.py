@@ -2,24 +2,28 @@
 Normalizador IA para Compa
 ==========================
 Toma productos_crudos con estado_mapeo='PENDIENTE' y los mapea a productos_maestros
-usando Claude (claude-haiku-4-5) para extraer nombre estandar, marca, presentacion,
+extrayendo nombre estandar, marca, presentacion (con gramaje EXPLÍCITO),
 unidad de medida y categoria.
+
+Provider configurable vía settings.normalizador_provider:
+  - "deepseek"  → DeepSeek V4 Flash (default — más barato, ~$5-8 USD para 35k productos)
+  - "anthropic" → Claude Haiku 4.5 (fallback)
 
 Uso:
     python -m app.services.normalizador.normalizer
     python -m app.services.normalizador.normalizer --limit 100
     python -m app.services.normalizador.normalizer --dry-run
+    python -m app.services.normalizador.normalizer --concurrency 3
 """
 
 import asyncio
 import json
 import logging
 import argparse
-from decimal import Decimal
-from typing import Optional
+import re
+from typing import Optional, Tuple
 from uuid import UUID
 
-import anthropic
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -28,7 +32,7 @@ from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("Normalizador")
 
@@ -42,31 +46,97 @@ CATEGORIAS = {
     "medicamentos":  "79793cc8-0ee2-45d0-a325-4677b2b199bb",
 }
 
+
 # ---------------------------------------------------------------------------
-# Prompt para Claude
+# Prompt — más estricto: forzamos a que el gramaje y la marca aparezcan
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """Eres un experto en normalización de productos de supermercados y farmacias venezolanas.
-Tu tarea es analizar nombres de productos crudos (tal como aparecen en tiendas online venezolanas)
-y extraer información estructurada.
+Tu tarea es analizar nombres de productos crudos y extraer información estructurada.
 
 Debes responder ÚNICAMENTE con un objeto JSON válido, sin texto adicional ni backticks.
 
-El JSON debe tener exactamente estos campos:
+Estructura del JSON:
 {
-  "nombre_estandar": "Nombre limpio y estandarizado del producto (marca + nombre + presentación)",
-  "marca": "Marca del producto o null si no se puede determinar",
-  "presentacion": "Cantidad y unidad de presentación (ej: '1 kg', '500 ml', '12 un') o null",
-  "unidad_medida": "Unidad base: 'kg', 'g', 'l', 'ml', 'un', 'sob', 'caja' u otra unidad apropiada, o null",
-  "categoria": "Una de: alimentos, bebidas, higiene, medicamentos",
-  "terminos_busqueda": "Lista de términos separados por coma para búsqueda (marca, nombre genérico, sinónimos)"
+  "nombre_estandar": "Marca + Producto + Atributo + Presentación EXACTA con gramaje/volumen",
+  "marca": "Solo el nombre de la marca o null",
+  "presentacion": "Cantidad y unidad EXACTA del nombre original (ej: '500 ml', '120 g', '30 tabletas') o null",
+  "unidad_medida": "kg | g | l | ml | un | sob | caja | tabletas | cápsulas | comprimidos",
+  "gramaje_valor": número (ej. 500, 120, 1.5) — solo el número de la presentación, sin unidad,
+  "gramaje_unidad": "ml | g | kg | l | un | tabletas | cápsulas | comprimidos | sob",
+  "categoria": "alimentos | bebidas | higiene | medicamentos",
+  "terminos_busqueda": "Palabras separadas por coma para búsqueda (marca, nombre genérico, sinónimos)"
 }
 
-Reglas:
-- nombre_estandar: Capitalizar correctamente (ej: "Leche Entera Parmalat 1 L"), sin mayúsculas completas
-- marca: Solo la marca, sin el nombre del producto
-- presentacion: Normalizar unidades (ML→ml, KG→kg, GR→g, UN→un, SOB→sob)
-- categoria: Clasificar según el tipo de producto
-- terminos_busqueda: Incluir marca, nombre genérico del producto, posibles búsquedas del usuario"""
+REGLAS CRÍTICAS:
+
+1. PRESERVA EL GRAMAJE EXACTO del nombre original.
+   - "Aceite Capri Oliva 500ml" → presentacion="500 ml", gramaje_valor=500, gramaje_unidad="ml"
+   - "Aceite Capri Oliva 1L" → presentacion="1 L", gramaje_valor=1, gramaje_unidad="l"
+   - Si el nombre tiene 120GR y otro 400GR, son productos DISTINTOS.
+
+2. PRESERVA LA MARCA EXACTA.
+   - "Aceite Capri Extra Virgen 500ml" → marca="Capri"
+   - "Aceite Iberia Extra Virgen 500ml" → marca="Iberia"
+   - NUNCA mezcles marcas. Si hay duda, marca=null mejor que asumir.
+
+3. nombre_estandar DEBE incluir marca + presentación.
+   - ✅ "Capri Aceite de Oliva Extra Virgen 500 ml"
+   - ✅ "Iberia Aceite de Oliva Extra Virgen 500 ml"
+   - ❌ "Aceite de Oliva Extra Virgen" (sin marca ni gramaje)
+
+4. Capitaliza correctamente. Sin MAYÚSCULAS COMPLETAS.
+
+5. Normaliza unidades:
+   - GR/Gr → "g"
+   - ML/Ml → "ml"
+   - KG/Kg → "kg"
+   - LT/Lt → "l"
+   - UN/Und → "un"
+
+6. Para medicamentos preserva DOSIS + cantidad de unidades:
+   - "Omeprazol 20 mg x 14 cápsulas" → presentacion="20 mg x 14 cápsulas"
+   - gramaje_valor=14, gramaje_unidad="cápsulas"
+
+EJEMPLOS:
+
+Entrada: "Cereal Flips Chocolate Bolsa 400 GR"
+Salida:
+{
+  "nombre_estandar": "Flips Cereal Chocolate 400 g",
+  "marca": "Flips",
+  "presentacion": "400 g",
+  "unidad_medida": "g",
+  "gramaje_valor": 400,
+  "gramaje_unidad": "g",
+  "categoria": "alimentos",
+  "terminos_busqueda": "cereal, flips, chocolate, desayuno"
+}
+
+Entrada: "Cereal Flips Chocolate Bolsa 120 GR"
+Salida:
+{
+  "nombre_estandar": "Flips Cereal Chocolate 120 g",
+  "marca": "Flips",
+  "presentacion": "120 g",
+  "unidad_medida": "g",
+  "gramaje_valor": 120,
+  "gramaje_unidad": "g",
+  "categoria": "alimentos",
+  "terminos_busqueda": "cereal, flips, chocolate, desayuno"
+}
+
+Entrada: "ACEITE OLIVA EXTRA VIRGEN IBERIA 500ML"
+Salida:
+{
+  "nombre_estandar": "Iberia Aceite de Oliva Extra Virgen 500 ml",
+  "marca": "Iberia",
+  "presentacion": "500 ml",
+  "unidad_medida": "ml",
+  "gramaje_valor": 500,
+  "gramaje_unidad": "ml",
+  "categoria": "alimentos",
+  "terminos_busqueda": "aceite, oliva, extra virgen, iberia"
+}"""
 
 USER_PROMPT_TEMPLATE = """Normaliza este producto venezolano:
 
@@ -76,21 +146,125 @@ Responde SOLO con el JSON, sin texto adicional."""
 
 
 # ---------------------------------------------------------------------------
+# Helpers de extracción de gramaje
+# ---------------------------------------------------------------------------
+
+GRAMAJE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(ml|ML|Ml|gr|GR|Gr|kg|KG|Kg|lt|LT|Lt|l|L|g|G|un|Un|UN|"
+    r"tabletas|tableta|cápsulas|cápsula|capsulas|capsula|comprimidos|comprimido|"
+    r"sobres|sobre|ampollas|ampolla|óvulos|ovulos)",
+    re.IGNORECASE,
+)
+
+UNIDAD_NORMALIZADA = {
+    "ml": "ml", "gr": "g", "g": "g", "kg": "kg", "lt": "l", "l": "l", "un": "un",
+    "tabletas": "tabletas", "tableta": "tabletas",
+    "cápsulas": "cápsulas", "cápsula": "cápsulas",
+    "capsulas": "cápsulas", "capsula": "cápsulas",
+    "comprimidos": "comprimidos", "comprimido": "comprimidos",
+    "sobres": "sob", "sobre": "sob",
+    "ampollas": "ampollas", "ampolla": "ampollas",
+    "óvulos": "óvulos", "ovulos": "óvulos",
+}
+
+
+def extraer_gramaje(texto: str) -> Optional[Tuple[float, str]]:
+    """
+    Extrae (valor, unidad_normalizada) del texto. None si no encuentra.
+
+    Para nombres con varios gramajes (ej. "Omeprazol 20 mg x 14 cápsulas"),
+    prioriza el ÚLTIMO match (suele ser el conteo de unidades).
+    """
+    matches = GRAMAJE_RE.findall(texto or "")
+    if not matches:
+        return None
+
+    # Tomar el último (suele ser el contenido del envase, no la dosis individual)
+    valor_str, unidad_raw = matches[-1]
+    try:
+        valor = float(valor_str.replace(",", "."))
+    except ValueError:
+        return None
+
+    unidad = UNIDAD_NORMALIZADA.get(unidad_raw.lower(), unidad_raw.lower())
+    return valor, unidad
+
+
+# ---------------------------------------------------------------------------
+# Cliente abstracto: DeepSeek o Anthropic
+# ---------------------------------------------------------------------------
+
+class _ClienteIA:
+    """Wrapper unificado que usa DeepSeek (vía OpenAI SDK) o Anthropic."""
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        if provider == "deepseek":
+            from openai import OpenAI
+            self.client = OpenAI(
+                api_key=settings.deepseek_api_key,
+                base_url="https://api.deepseek.com",
+            )
+            self.model = settings.deepseek_model
+        elif provider == "anthropic":
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            self.model = "claude-haiku-4-5"
+        else:
+            raise ValueError(f"Provider desconocido: {provider}")
+
+    def chat(self, system: str, user: str, max_tokens: int = 400) -> str:
+        """Llamada bloqueante. Retorna el texto de respuesta."""
+        if self.provider == "deepseek":
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.0,  # Determinístico para normalización
+                stream=False,
+            )
+            return resp.choices[0].message.content or ""
+        # anthropic
+        resp = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return resp.content[0].text
+
+
+# ---------------------------------------------------------------------------
 # Clase principal
 # ---------------------------------------------------------------------------
 class NormalizadorIA:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, provider: Optional[str] = None, concurrency: int = 3):
         self.dry_run = dry_run
-        self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self.provider = provider or settings.normalizador_provider
+        self.concurrency = max(1, concurrency)
+        self.client = _ClienteIA(self.provider)
         self.engine = create_async_engine(settings.database_url, echo=False)
         self.AsyncSession = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
-        self.stats = {"procesados": 0, "mapeados": 0, "nuevos_maestros": 0, "errores": 0, "requieren_humano": 0}
+        self.stats = {
+            "procesados": 0,
+            "mapeados": 0,
+            "nuevos_maestros": 0,
+            "errores": 0,
+            "requieren_humano": 0,
+        }
+        # Lock para INSERT de productos_maestros (evita races con concurrency>1)
+        self._maestro_lock = asyncio.Lock()
 
     async def run(self, limit: Optional[int] = None, batch_size: int = 20):
-        logger.info(f"{'[DRY RUN] ' if self.dry_run else ''}Iniciando Normalizador IA")
+        logger.info(
+            f"{'[DRY RUN] ' if self.dry_run else ''}Iniciando Normalizador "
+            f"provider={self.provider} model={self.client.model} concurrency={self.concurrency}"
+        )
 
         async with self.AsyncSession() as session:
-            # Contar pendientes
             result = await session.execute(text(
                 "SELECT COUNT(*) FROM productos_crudos WHERE estado_mapeo = 'PENDIENTE'"
             ))
@@ -124,16 +298,19 @@ class NormalizadorIA:
                 logger.info("No hay más productos PENDIENTE.")
                 break
 
-            logger.info(f"Procesando lote de {len(lote)} productos...")
+            logger.info(f"Procesando lote de {len(lote)} productos (concurrency={self.concurrency})...")
 
-            for row in lote:
-                await self._procesar_producto(
-                    id_producto_crudo=row.id_producto_crudo,
-                    nombre_original=row.nombre_original,
-                )
-                procesados_total += 1
+            # Procesamiento concurrente con semáforo
+            sem = asyncio.Semaphore(self.concurrency)
 
-            await asyncio.sleep(0.5)  # pausa entre lotes para no saturar la API
+            async def bound(row):
+                async with sem:
+                    await self._procesar_producto(row.id_producto_crudo, row.nombre_original)
+
+            await asyncio.gather(*(bound(row) for row in lote))
+            procesados_total += len(lote)
+
+            await asyncio.sleep(0.3)
 
         logger.info(f"Normalizador finalizado. Stats: {self.stats}")
         await self.engine.dispose()
@@ -141,17 +318,14 @@ class NormalizadorIA:
     async def _procesar_producto(self, id_producto_crudo: UUID, nombre_original: str):
         self.stats["procesados"] += 1
         try:
-            # 1. Llamar a Claude para extraer datos
-            datos = await self._extraer_datos_claude(nombre_original)
+            datos = await self._extraer_datos(nombre_original)
             if not datos:
                 await self._marcar_estado(id_producto_crudo, "REQUIERE_HUMANO")
                 self.stats["requieren_humano"] += 1
                 return
 
-            # 2. Buscar o crear producto maestro
             id_maestro = await self._buscar_o_crear_maestro(datos, nombre_original)
 
-            # 3. Vincular producto crudo con maestro
             if not self.dry_run:
                 await self._vincular(id_producto_crudo, id_maestro)
 
@@ -163,112 +337,150 @@ class NormalizadorIA:
             await self._marcar_estado(id_producto_crudo, "REQUIERE_HUMANO")
             self.stats["errores"] += 1
 
-    async def _extraer_datos_claude(self, nombre: str) -> Optional[dict]:
+    async def _extraer_datos(self, nombre: str) -> Optional[dict]:
+        """Llama al modelo y parsea el JSON. Ejecuta en thread para no bloquear."""
         try:
-            response = self.client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=300,
-                system=SYSTEM_PROMPT,
-                messages=[{
-                    "role": "user",
-                    "content": USER_PROMPT_TEMPLATE.format(nombre=nombre)
-                }]
+            raw = await asyncio.to_thread(
+                self.client.chat,
+                SYSTEM_PROMPT,
+                USER_PROMPT_TEMPLATE.format(nombre=nombre),
+                400,
             )
-            raw = response.content[0].text.strip()
-            # Limpiar backticks si Claude los incluyó por error
-            raw = raw.replace("```json", "").replace("```", "").strip()
+            raw = raw.strip().replace("```json", "").replace("```", "").strip()
             datos = json.loads(raw)
 
-            # Validar campos requeridos
             required = ["nombre_estandar", "marca", "presentacion", "unidad_medida", "categoria", "terminos_busqueda"]
             for field in required:
                 if field not in datos:
-                    logger.warning(f"Campo faltante '{field}' en respuesta Claude para: {nombre}")
+                    logger.warning(f"Campo faltante '{field}' en respuesta para: {nombre}")
                     return None
 
-            # Validar categoría
             if datos["categoria"] not in CATEGORIAS:
-                datos["categoria"] = "alimentos"  # fallback
+                datos["categoria"] = "alimentos"
+
+            # Si el modelo no devolvió gramaje_valor/unidad, los extraemos del original
+            if not datos.get("gramaje_valor") or not datos.get("gramaje_unidad"):
+                extracted = extraer_gramaje(nombre) or extraer_gramaje(datos.get("presentacion", ""))
+                if extracted:
+                    datos["gramaje_valor"] = extracted[0]
+                    datos["gramaje_unidad"] = extracted[1]
 
             return datos
 
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON inválido de Claude para '{nombre}': {e}")
+            logger.warning(f"JSON inválido para '{nombre}': {e}")
             return None
         except Exception as e:
-            logger.warning(f"Error llamando a Claude para '{nombre}': {e}")
+            logger.warning(f"Error llamando a {self.provider} para '{nombre}': {e}")
             return None
 
     async def _buscar_o_crear_maestro(self, datos: dict, nombre_original: str) -> UUID:
+        """
+        Busca un producto maestro EXISTENTE compatible. Si no existe, crea uno.
+
+        Reglas de compatibilidad estrictas — dos productos solo se considera
+        el mismo maestro si:
+          - misma categoría
+          - misma marca (case-insensitive, exacta)
+          - mismo gramaje_valor (con tolerancia <5%)
+          - misma gramaje_unidad
+          - similarity de nombre >= 0.85
+        """
         id_categoria = CATEGORIAS[datos["categoria"]]
         nombre_estandar = datos["nombre_estandar"]
         marca_nueva = (datos.get("marca") or "").strip().lower()
         presentacion_nueva = (datos.get("presentacion") or "").strip().lower()
+        gramaje_valor = datos.get("gramaje_valor")
+        gramaje_unidad = (datos.get("gramaje_unidad") or "").strip().lower()
 
         async with self.AsyncSession() as session:
-            # Buscar por similitud usando índice GIN (trigrams).
-            # Comparamos también marca y presentación: dos productos solo se
-            # consideran el mismo si comparten nombre Y marca Y presentación.
+            # Buscamos candidatos por similaridad de nombre + categoría
             result = await session.execute(text("""
                 SELECT id_producto_maestro, nombre_estandar, marca, presentacion
                 FROM productos_maestros
                 WHERE nombre_estandar % :nombre
                   AND id_categoria = :id_cat
                 ORDER BY similarity(nombre_estandar, :nombre) DESC
-                LIMIT 5
+                LIMIT 10
             """), {"nombre": nombre_estandar, "id_cat": id_categoria})
             existentes = result.fetchall()
 
             for existente in existentes:
+                marca_existe = (existente.marca or "").strip().lower()
+                presentacion_existe = (existente.presentacion or "").strip().lower()
+
+                # ── MARCA: si ambos tienen marca, deben ser iguales (exacto) ──
+                if marca_nueva and marca_existe and marca_nueva != marca_existe:
+                    continue
+
+                # ── GRAMAJE: comparación por valor y unidad (no similarity) ──
+                gramaje_existe = extraer_gramaje(existente.presentacion or "") or \
+                                 extraer_gramaje(existente.nombre_estandar or "")
+
+                if gramaje_valor and gramaje_existe:
+                    valor_e, unidad_e = gramaje_existe
+                    # Unidades distintas → producto distinto
+                    if gramaje_unidad and unidad_e and gramaje_unidad != unidad_e:
+                        continue
+                    # Tolerancia 5% (cubre redondeos como 70 vs 70.5)
+                    if abs(valor_e - gramaje_valor) / max(valor_e, gramaje_valor) > 0.05:
+                        continue
+
+                # ── SIMILARITY del nombre ≥ 0.85 ──
                 sim_result = await session.execute(text("""
                     SELECT similarity(:a, :b) as sim
                 """), {"a": nombre_estandar, "b": existente.nombre_estandar})
-                sim = sim_result.scalar()
+                sim = sim_result.scalar() or 0
 
-                # Threshold subido a 0.85 (antes 0.6 era muy permisivo).
-                # Y exigimos que marca + presentación coincidan también.
-                marca_existe = (existente.marca or "").strip().lower()
-                presentacion_existe = (existente.presentacion or "").strip().lower()
-                marcas_coinciden = (
-                    not marca_nueva or not marca_existe or marca_nueva == marca_existe
+                if sim < 0.85:
+                    continue
+
+                # Match
+                logger.debug(
+                    f"Match (sim={sim:.2f}, marca={marca_existe}): "
+                    f"'{existente.nombre_estandar}'"
                 )
-                presentaciones_coinciden = (
-                    not presentacion_nueva
-                    or not presentacion_existe
-                    or presentacion_nueva == presentacion_existe
-                )
+                return existente.id_producto_maestro
 
-                if sim >= 0.85 and marcas_coinciden and presentaciones_coinciden:
-                    logger.debug(f"Match encontrado (sim={sim:.2f}): '{existente.nombre_estandar}'")
-                    return existente.id_producto_maestro
-
-            # No existe — crear nuevo producto maestro
+            # No encontró match → crear nuevo
             if self.dry_run:
                 logger.info(f"[DRY RUN] Crearía maestro: '{nombre_estandar}'")
                 return UUID("00000000-0000-0000-0000-000000000000")
 
-            result = await session.execute(text("""
-                INSERT INTO productos_maestros (
-                    id_categoria, nombre_estandar, marca, presentacion,
-                    unidad_medida, terminos_busqueda, activo
-                ) VALUES (
-                    :id_cat, :nombre, :marca, :presentacion,
-                    :unidad, :terminos, true
-                )
-                RETURNING id_producto_maestro
-            """), {
-                "id_cat":      id_categoria,
-                "nombre":      nombre_estandar,
-                "marca":       datos.get("marca"),
-                "presentacion": datos.get("presentacion"),
-                "unidad":      datos.get("unidad_medida"),
-                "terminos":    datos.get("terminos_busqueda"),
-            })
-            await session.commit()
-            nuevo_id = result.scalar()
-            self.stats["nuevos_maestros"] += 1
-            logger.debug(f"Nuevo maestro creado: '{nombre_estandar}'")
-            return nuevo_id
+            # Lock para evitar que dos workers concurrentes creen el mismo maestro
+            async with self._maestro_lock:
+                # Re-check después del lock (otro worker pudo haberlo creado)
+                result = await session.execute(text("""
+                    SELECT id_producto_maestro FROM productos_maestros
+                    WHERE nombre_estandar = :nombre AND id_categoria = :id_cat
+                    LIMIT 1
+                """), {"nombre": nombre_estandar, "id_cat": id_categoria})
+                ya_existe = result.scalar()
+                if ya_existe:
+                    return ya_existe
+
+                result = await session.execute(text("""
+                    INSERT INTO productos_maestros (
+                        id_categoria, nombre_estandar, marca, presentacion,
+                        unidad_medida, terminos_busqueda, activo
+                    ) VALUES (
+                        :id_cat, :nombre, :marca, :presentacion,
+                        :unidad, :terminos, true
+                    )
+                    RETURNING id_producto_maestro
+                """), {
+                    "id_cat":      id_categoria,
+                    "nombre":      nombre_estandar,
+                    "marca":       datos.get("marca"),
+                    "presentacion": datos.get("presentacion"),
+                    "unidad":      datos.get("unidad_medida"),
+                    "terminos":    datos.get("terminos_busqueda"),
+                })
+                await session.commit()
+                nuevo_id = result.scalar()
+                self.stats["nuevos_maestros"] += 1
+                logger.debug(f"Nuevo maestro creado: '{nombre_estandar}'")
+                return nuevo_id
 
     async def _vincular(self, id_producto_crudo: UUID, id_producto_maestro: UUID):
         async with self.AsyncSession() as session:
@@ -299,10 +511,21 @@ async def main():
     parser = argparse.ArgumentParser(description="Normalizador IA de productos Compa")
     parser.add_argument("--limit", type=int, default=None, help="Máximo de productos a procesar")
     parser.add_argument("--dry-run", action="store_true", help="No escribe en la DB")
-    parser.add_argument("--batch-size", type=int, default=20, help="Tamaño del lote (default: 20)")
+    parser.add_argument("--batch-size", type=int, default=30, help="Tamaño del lote (default: 30)")
+    parser.add_argument("--concurrency", type=int, default=3, help="Llamadas IA en paralelo (default: 3)")
+    parser.add_argument(
+        "--provider",
+        choices=["deepseek", "anthropic"],
+        default=None,
+        help="Provider IA (default: lee de settings.normalizador_provider)",
+    )
     args = parser.parse_args()
 
-    normalizador = NormalizadorIA(dry_run=args.dry_run)
+    normalizador = NormalizadorIA(
+        dry_run=args.dry_run,
+        provider=args.provider,
+        concurrency=args.concurrency,
+    )
     await normalizador.run(limit=args.limit, batch_size=args.batch_size)
 
 

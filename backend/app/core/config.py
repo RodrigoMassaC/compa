@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # ── DeepSeek (usado por el normalizador masivo) ──
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-v4-flash"
+    # Provider del normalizador: "deepseek" o "anthropic"
+    normalizador_provider: str = "deepseek"
+
     # ── Meta / WhatsApp ──
     meta_whatsapp_token: str = ""
     meta_phone_number_id: str = ""
