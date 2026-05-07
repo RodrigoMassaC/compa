@@ -306,10 +306,18 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
         FROM candidatos cand
         JOIN precios_recientes pr ON pr.id_producto_maestro = cand.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
-        -- DISTINCT ON por tienda toma el primero → ordenamos por sim DESC
-        -- y luego precio ASC, así cada tienda trae el match MÁS RELEVANTE
-        -- (no el más barato ignorando relevancia).
-        ORDER BY c.id_cadena, cand.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
+        -- DISTINCT ON por tienda toma el primero. Estrategia:
+        -- 1) bucket de similitud (alta >= 0.4 vs baja) — todos los matches que
+        --    pasaron la regex son al menos relevantes razonablemente.
+        -- 2) dentro del bucket alto, ordenamos por PRECIO ASC.
+        -- Así cada tienda devuelve el match más BARATO entre los relevantes,
+        -- que es lo que el usuario espera (ej. agua micelar Zoah > Valmy si
+        -- Zoah es más barato).
+        ORDER BY
+          c.id_cadena,
+          (CASE WHEN cand.sim >= 0.4 THEN 0 ELSE 1 END),
+          precio_usd ASC NULLS LAST,
+          cand.sim DESC NULLS LAST
     """)
 
     result = await db.execute(query, {"termino": termino_norm, "rx": regex})
@@ -784,8 +792,13 @@ Solo usa "buscar" si el usuario claramente pregunta por UN producto independient
 
 EJEMPLOS DE "conversar":
 - "vamos con farmatodo" / "compro en X" / "finalizar pedido" / "esa es":
-  → Compa solo compara precios, no procesa pedidos. Responde:
-  "¡Excelente elección! Para comprarlo, ve directo a Farmatodo (web o sucursal). ¿Te ayudo con otra búsqueda?"
+  → Compa solo compara precios, no procesa pedidos. Incluye el link de la tienda:
+  - Farmatodo → https://www.farmatodo.com.ve
+  - Farmago → https://www.farmago.com.ve
+  - Locatel → https://www.locatel.com.ve
+  - Central Madeirense → https://tucentralonline.com
+  - Excelsior Gama → https://gamaenlinea.com
+  Ejemplo: "¡Excelente elección! Compra directo en Farmatodo: https://www.farmatodo.com.ve. ¿Otra búsqueda?"
 - "solo eso" / "nada más" / "ya":
   "¡Perfecto! Cuando necesites comparar otro precio, escríbeme. 👋"
 - Saludos, gracias, etc → respuesta amigable corta."""
@@ -796,8 +809,13 @@ RESPONSE_SYSTEM = """Eres Compa, el asistente oficial de la app venezolana de co
 ALCANCE DE COMPA — IMPORTANTE:
 - Compa SOLO compara precios. NO procesamos pedidos, NO entregamos productos, NO cobramos.
 - NUNCA digas "tu pedido está listo", "vamos con esa orden", "finalizar pedido", "procedemos con la compra".
-- Si el usuario dice "compro en X" / "vamos con Farmatodo" / "finalizar", entiende que ya tomó su decisión y responde:
-  "¡Perfecto! Esa es tu mejor opción. Para comprarlo, ve directo a Farmatodo (web o tienda física). ¿Te ayudo con otra búsqueda?"
+- Si el usuario dice "compro en X" / "vamos con Farmatodo" / "finalizar", entiende que ya tomó su decisión y respóndele con el link de la tienda:
+  - Farmatodo → https://www.farmatodo.com.ve
+  - Farmago → https://www.farmago.com.ve
+  - Locatel → https://www.locatel.com.ve
+  - Central Madeirense → https://tucentralonline.com
+  - Excelsior Gama → https://gamaenlinea.com
+  Ejemplo: "¡Excelente elección! Compra directo en Farmatodo: https://www.farmatodo.com.ve. ¿Otra búsqueda?"
 - Nunca des la impresión de que vas a entregar el producto o cobrar — Compa solo informa precios.
 
 REGLA #0 — INVIOLABLE — PRECIOS Y NÚMEROS:
@@ -840,8 +858,13 @@ CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. Re
 
 ALCANCE DE COMPA — INVIOLABLE:
 - Compa SOLO informa precios. NO procesa pedidos, NO entrega productos, NO cobra.
-- Cuando el usuario diga "compro en X", "vamos con Y", "finalizar", "esa es", responde tipo:
-  "Excelente elección. Para comprarlo, ve directo a <Tienda> (web o sucursal). ¿Otra búsqueda?"
+- Cuando el usuario diga "compro en X", "vamos con Y", "finalizar", "esa es", responde con el LINK de la tienda:
+  - Farmatodo → https://www.farmatodo.com.ve
+  - Farmago → https://www.farmago.com.ve
+  - Locatel → https://www.locatel.com.ve
+  - Central Madeirense → https://tucentralonline.com
+  - Excelsior Gama → https://gamaenlinea.com
+  Ejemplo: "Excelente elección. Compra directo en Farmatodo: https://www.farmatodo.com.ve ¿Otra búsqueda?"
 - NUNCA digas "tu pedido está listo", "procedemos con la orden", "vamos con esa compra".
 - NUNCA te apropies del paso de comprar/entregar.
 
