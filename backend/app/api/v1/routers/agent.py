@@ -206,6 +206,23 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
     # más barato y lo destaque correctamente.
     resultado.sort(key=_precio_min)
 
+    # Filtro de outliers: si hay varios productos relevantes, descarta los que
+    # tengan precio < 30% del mediano. Evita placeholders raros de Farmatodo
+    # tipo "Colgate Crema Dental $0.30" cuando el resto cuesta $2-4 USD.
+    if len(resultado) >= 3:
+        import statistics
+        precios = [_precio_min(p) for p in resultado if _precio_min(p) < 9999]
+        if len(precios) >= 3:
+            try:
+                mediano = statistics.median(precios)
+                if mediano > 0:
+                    resultado = [
+                        p for p in resultado
+                        if _precio_min(p) >= mediano * 0.30
+                    ] or resultado  # fail-safe: si filtra todo, devuelve original
+            except statistics.StatisticsError:
+                pass
+
     for p in resultado:
         p.pop("_sim", None)
 
@@ -392,11 +409,43 @@ async def calcular_carrito_optimo(items: list[str], db: AsyncSession, client) ->
 
     excluidos = await filtrar_carrito_batch(all_matches, client)
 
+    # Filtro de OUTLIERS por precio: para cada item, calculamos el precio
+    # mediano cross-tienda. Si un match tiene precio < 30% del mediano,
+    # probablemente es un placeholder o un producto distinto (ej. una crema
+    # dental "$0.30" cuando en otras tiendas cuesta $2-4 USD).
+    import statistics
+    precios_por_item: dict[str, list[float]] = {}
+    for m in all_matches:
+        if m["idx"] in excluidos:
+            continue
+        precios_por_item.setdefault(m["item"], []).append(m["precio_usd"])
+
+    outliers_por_precio: set[int] = set()
+    for item, precios in precios_por_item.items():
+        if len(precios) < 2:
+            continue  # con 1 sola tienda no hay comparación
+        try:
+            mediano = statistics.median(precios)
+        except statistics.StatisticsError:
+            continue
+        if mediano <= 0:
+            continue
+        # Marcar como outlier los que son < 30% del mediano
+        for m in all_matches:
+            if m["item"] != item or m["idx"] in excluidos:
+                continue
+            if m["precio_usd"] < mediano * 0.30:
+                logger.info(
+                    f"⚠️  Outlier detectado: '{m['item']}' en {m['tienda']} a "
+                    f"${m['precio_usd']:.2f} (mediano ${mediano:.2f}) — descartado"
+                )
+                outliers_por_precio.add(m["idx"])
+
     # Índice rápido de matches válidos: (item, tienda) → match
     validos: dict[tuple, dict] = {
         (m["item"], m["tienda"]): m
         for m in all_matches
-        if m["idx"] not in excluidos
+        if m["idx"] not in excluidos and m["idx"] not in outliers_por_precio
     }
 
     # Fase 3: inicializar tiendas conocidas
