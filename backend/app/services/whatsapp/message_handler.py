@@ -501,28 +501,14 @@ async def _call_agent(mensaje: str, historial: list[dict], nombre_usuario: str =
 
 
 def _format_for_whatsapp(data: dict) -> str:
-    """Formatea la respuesta del agente como texto plano para WhatsApp con comparación entre tiendas."""
-    lines = [data.get("respuesta", "")]
-    productos = data.get("productos", [])[:5]
-    if productos:
-        lines.append("")
-    for i, prod in enumerate(productos):
-        ofertas = prod.get("ofertas", [])
-        if not ofertas:
-            continue
-        nombre = f"{prod.get('nombre', '')} {prod.get('presentacion', '')}".strip()
-        marca = prod.get("marca", "")
-        header = f"*{nombre}*" + (f" ({marca})" if marca else "")
-        prefix = "🏆" if i == 0 else f"{i + 1}."
-        lines.append(f"{prefix} {header}")
-        for oferta in ofertas[:4]:
-            precio_usd = oferta.get("precio_usd", 0)
-            precio_ves = oferta.get("precio_ves", 0)
-            tienda = oferta.get("tienda", "")
-            ves_str = f" / {precio_ves:,.0f} Bs" if precio_ves else ""
-            lines.append(f"  • {tienda}: ${precio_usd:.2f}{ves_str}")
-        lines.append("")
-    return "\n".join(lines).strip()
+    """Devuelve solo la respuesta del agente.
+
+    El agente IA ya formatea los productos con precios, marcas y CTAs en su
+    respuesta. Antes agregabamos una lista numerada redundante (🏆, 2, 3...)
+    que duplicaba la información y hacía el mensaje muy largo / cortarse en
+    WhatsApp. Eso se eliminó — el bot maneja todo el formato en `respuesta`.
+    """
+    return data.get("respuesta", "").strip()
 
 
 # ── Punto de entrada ───────────────────────────────────────────────────────────

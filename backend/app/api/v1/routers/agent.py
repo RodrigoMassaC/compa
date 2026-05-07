@@ -160,19 +160,31 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             key=lambda x: x["precio_usd"] if x["precio_usd"] is not None else 9999
         )
 
-    # Ordenar y diversificar por tienda para que el agente vea opciones de
-    # múltiples cadenas (no solo la dominante).
-    # 1) ranking principal: similitud alta + precio bajo
+    # Ordenar dando prioridad al PRECIO entre productos relevantes.
+    # Estrategia: agrupar por bucket de similarity (alto/medio) y dentro de
+    # cada bucket ordenar por precio ASC. Así "agua micelar Zoah ($3)"
+    # aparece antes que "agua micelar Valmy ($5)" aunque la sim sea similar.
+    def _precio_min(p):
+        if not p["ofertas"]:
+            return 9999
+        precio = p["ofertas"][0]["precio_usd"]
+        return precio if precio is not None else 9999
+
+    def _bucket_sim(p):
+        sim = p["_sim"] or 0
+        if sim >= 0.5:
+            return 0  # alta relevancia
+        if sim >= 0.25:
+            return 1  # media
+        return 2  # baja
+
     candidatos = sorted(
         todos.values(),
-        key=lambda x: (
-            -(x["_sim"] or 0),  # mayor similitud primero
-            x["ofertas"][0]["precio_usd"] if x["ofertas"] and x["ofertas"][0]["precio_usd"] else 9999,
-        ),
+        key=lambda x: (_bucket_sim(x), _precio_min(x)),
     )
 
-    # 2) round-robin por tienda principal del producto: garantiza que aparezcan
-    # productos de distintas cadenas en los primeros resultados
+    # Round-robin por tienda principal — diversifica cadenas en los primeros
+    # resultados, sin sacrificar el orden por precio dentro de cada tienda.
     por_tienda: dict[str, list[dict]] = {}
     for p in candidatos:
         if not p["ofertas"]:
@@ -189,6 +201,10 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             resultado.append(por_tienda[tienda].pop(0))
             if len(resultado) >= 10:
                 break
+
+    # Re-ordenar el resultado FINAL por precio para que el bot vea primero el
+    # más barato y lo destaque correctamente.
+    resultado.sort(key=_precio_min)
 
     for p in resultado:
         p.pop("_sim", None)
@@ -737,17 +753,23 @@ Si el contexto dice "Filtros pedidos por el usuario: marca=X, presentación=Y, d
 - Si pidió "32 mg" y hay "16 mg" o "8 mg", muéstralos como alternativas pero advierte que la dosis es distinta.
 
 REGLAS GENERALES:
-1. NUNCA sugieras tiendas fuera de las de nuestra DB (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). Nunca menciones Makro, Día, Plan Suárez, etc.
-2. NUNCA digas "los precios pueden variar según ubicación".
-3. Cuando hay varias tiendas, compara y destaca la más económica (siempre que sean equivalentes en presentación y dosis).
-4. Si hay distintas marcas o presentaciones, menciónalas brevemente.
-5. Si NO hay resultados o son irrelevantes, dilo con claridad y pide más detalles. No inventes productos.
-6. Tono: amigable, profesional, español venezolano natural. Pocos emojis.
-7. Máximo 5–7 líneas (con filtros puede crecer un poco).
-8. SIEMPRE cierra con una pregunta de continuación, ejemplos:
+1. Los productos del JSON vienen ordenados de MENOR A MAYOR PRECIO. El primero (productos[0]) es la opción más económica disponible.
+2. SIEMPRE destaca el más barato como "Mejor opción económica" — no asumas que la marca más conocida es la mejor.
+3. NUNCA sugieras tiendas fuera de las de nuestra DB (Farmatodo, Farmago, Locatel, Central Madeirense, Excelsior Gama). Nunca menciones Makro, Día, Plan Suárez, etc.
+4. NUNCA digas "los precios pueden variar según ubicación".
+5. Cuando hay varias tiendas, compara y destaca la más económica (siempre que sean equivalentes en presentación y dosis).
+6. Si hay distintas marcas o presentaciones, menciónalas brevemente.
+7. Si NO hay resultados o son irrelevantes, dilo con claridad y pide más detalles. No inventes productos.
+8. Tono: amigable, profesional, español venezolano natural. Pocos emojis.
+
+REGLAS DE LONGITUD — CRÍTICO PARA WHATSAPP:
+9. **Máximo 6 líneas** y ~700 caracteres. Si excedes, WhatsApp corta.
+10. **NO repitas productos**. Cada producto se menciona UNA sola vez.
+11. NO uses listas numeradas dobles (no agregues una segunda lista al final).
+12. SIEMPRE cierra con UNA pregunta corta de continuación:
    - "¿Buscas otra marca o presentación?"
-   - "¿Quieres añadir algo más a tu lista?"
-   - "¿Es tu compra final o seguimos comparando?\""""
+   - "¿Te interesa el de X mg o Y mg?"
+   - "¿Es tu compra final?\""""
 
 
 CART_SYSTEM = """Eres Compa, asistente venezolano de comparación de precios. Recibes un desglose pre-procesado y respondes con un mensaje COMPACTO para WhatsApp.
@@ -952,7 +974,7 @@ async def chat(
 
         respuesta_response = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=500,
+            max_tokens=350,  # forzar respuestas cortas para WhatsApp
             system=RESPONSE_SYSTEM,
             messages=mensajes_respuesta
         )
