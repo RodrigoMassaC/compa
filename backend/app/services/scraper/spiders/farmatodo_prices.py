@@ -216,7 +216,7 @@ class FarmatodoPriceSpider(BaseSpider):
                 return None
 
             # Log diagnóstico: mostrar texto crudo + valor parseado
-            self.logger.debug(f"  💰 raw='{precio_raw}' → {precio} Bs ← {url}")
+            self.logger.info(f"  💰 raw='{precio_raw}' → {precio} Bs ← {url[-50:]}")
 
             return precio
 
