@@ -244,6 +244,34 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                     "precio_ves": float(row["precio_ves"]) if row["precio_ves"] else None,
                 })
 
+    # Filtro de outliers POR OFERTA dentro de cada producto.
+    # Si un producto tiene precio en múltiples tiendas y una está muy por
+    # debajo del mediano (< 30%), probablemente es placeholder mal scrapeado.
+    # Ej: Colgate Total 12 100ml a $0.32 en Farmatodo cuando cuesta $3.50
+    # en otras tiendas → descarta esa oferta.
+    import statistics as _stats
+    for pid in todos:
+        ofertas = todos[pid]["ofertas"]
+        precios_validos = [o["precio_usd"] for o in ofertas if o["precio_usd"] is not None]
+        if len(precios_validos) >= 2:
+            try:
+                mediano = _stats.median(precios_validos)
+            except _stats.StatisticsError:
+                mediano = None
+            if mediano and mediano > 0:
+                threshold = mediano * 0.30
+                ofertas_filtradas = []
+                for o in ofertas:
+                    p_usd = o.get("precio_usd")
+                    if p_usd is not None and p_usd < threshold:
+                        logger.info(
+                            f"⚠️  Oferta outlier descartada — producto={todos[pid]['nombre'][:40]} "
+                            f"tienda={o['tienda']} precio=${p_usd:.2f} (mediano ${mediano:.2f})"
+                        )
+                        continue
+                    ofertas_filtradas.append(o)
+                todos[pid]["ofertas"] = ofertas_filtradas
+
     # Ordenar ofertas por precio dentro de cada producto
     for pid in todos:
         todos[pid]["ofertas"].sort(
@@ -362,11 +390,31 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
                 pc.id_producto_maestro,
                 e.id_cadena,
                 hp.precio_bruto,
-                hp.moneda_origen
+                hp.moneda_origen,
+                CASE
+                    WHEN hp.moneda_origen = 'USD' THEN hp.precio_bruto
+                    WHEN hp.moneda_origen = 'VES' THEN ROUND(hp.precio_bruto / (SELECT valor_usd FROM tasa), 2)
+                END as precio_usd_calc
             FROM historial_precios hp
             JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
             JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+            WHERE NOT (
+                (hp.moneda_origen = 'VES' AND hp.precio_bruto < 1)
+                OR (hp.moneda_origen = 'USD' AND hp.precio_bruto < 0.05)
+            )
             ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+        ),
+        -- Mediano de precio_usd por producto — para detectar outliers.
+        -- Si un producto tiene oferta en >=2 tiendas, los precios <30% del
+        -- mediano son placeholders mal scrapeados (ej. $0.32 cuando cuesta $3.50).
+        medianos AS (
+            SELECT
+                id_producto_maestro,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY precio_usd_calc) AS mediano,
+                COUNT(*) as n_tiendas
+            FROM precios_recientes
+            WHERE precio_usd_calc > 0
+            GROUP BY id_producto_maestro
         ),
         candidatos AS (
             SELECT
@@ -378,10 +426,6 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
                     similarity(LOWER(pm.nombre_estandar), :termino),
                     similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino)
                 ) as sim,
-                -- score_primario: 2 si el término aparece como sustantivo principal
-                -- al INICIO del nombre, 1 si aparece dentro de las primeras 3
-                -- palabras del nombre, 0 si aparece más adelante (probablemente
-                -- como modificador, ej. "Harina de Arroz" cuando se busca "arroz").
                 CASE
                     WHEN LOWER(pm.nombre_estandar) ~ ('^' || :first_word || '\\M') THEN 2
                     WHEN LOWER(pm.nombre_estandar) ~ ('^[a-záéíóúñ]+\\s+' || :first_word || '\\M') THEN 2
@@ -399,10 +443,7 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
             cand.nombre_estandar,
             cand.marca,
             cand.presentacion,
-            CASE
-                WHEN pr.moneda_origen = 'USD' THEN pr.precio_bruto
-                WHEN pr.moneda_origen = 'VES' THEN ROUND(pr.precio_bruto / (SELECT valor_usd FROM tasa), 2)
-            END as precio_usd,
+            pr.precio_usd_calc as precio_usd,
             CASE
                 WHEN pr.moneda_origen = 'VES' THEN pr.precio_bruto
                 WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
@@ -410,6 +451,14 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
         FROM candidatos cand
         JOIN precios_recientes pr ON pr.id_producto_maestro = cand.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
+        LEFT JOIN medianos m ON m.id_producto_maestro = cand.id_producto_maestro
+        -- Filtro de outliers: si hay >=2 tiendas para este producto y el
+        -- precio actual es < 30% del mediano, descarta (placeholder).
+        WHERE NOT (
+            m.n_tiendas >= 2
+            AND m.mediano > 0
+            AND pr.precio_usd_calc < m.mediano * 0.30
+        )
         -- Estrategia de orden por tienda:
         -- 1) score_primario DESC: el término al inicio del nombre gana
         --    (ej. "Arroz Mary" sobre "Harina de Arroz" cuando se busca "arroz")
