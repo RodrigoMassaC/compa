@@ -57,34 +57,53 @@ PRICE_JS = """
 def _parse_precio(raw: str) -> Optional[Decimal]:
     """
     Convierte texto de precio venezolano a Decimal.
-    Maneja formatos: 'Bs. 1.312,10', 'Bs.636.30', 'Bs 1312.10'
+    Maneja formatos: 'Bs. 1.312,10', 'Bs.636.30', 'Bs 1312.10', 'Bs1.562,30', etc.
+
+    El formato venezolano oficial es: punto = miles, coma = decimal
+    (ej. 1.562,30 = mil quinientos sesenta y dos con treinta).
     """
     try:
-        limpio = raw.replace("Bs.", "").replace("Bs", "").strip()
-        limpio = re.sub(r'\s+', '', limpio)
+        # Limpiar prefijos y sufijos comunes
+        limpio = raw.replace("Bs.", "").replace("Bs", "").replace("BS", "").replace("bs", "")
+        # Eliminar espacios incluso non-breaking ( ) y otros invisibles
+        limpio = re.sub(r"[\s ​ ]+", "", limpio)
+        # Eliminar cualquier caracter no numérico al inicio/final
+        limpio = re.sub(r"^[^\d]+|[^\d]+$", "", limpio)
+
+        if not limpio:
+            return None
 
         tiene_coma = "," in limpio
         tiene_punto = "." in limpio
 
         if tiene_coma and tiene_punto:
-            # Coma después del último punto → coma es decimal (formato VE)
+            # Mirar cuál separador aparece de último — ese es el decimal
             if limpio.rfind(",") > limpio.rfind("."):
+                # Formato VE: 1.562,30 → punto=miles, coma=decimal
                 limpio = limpio.replace(".", "").replace(",", ".")
             else:
+                # Formato US: 1,562.30 → coma=miles, punto=decimal
                 limpio = limpio.replace(",", "")
         elif tiene_coma:
             partes = limpio.split(",")
             if len(partes) == 2 and len(partes[1]) <= 2:
-                limpio = limpio.replace(",", ".")   # decimal
+                # 156,23 → decimal venezolano
+                limpio = limpio.replace(",", ".")
             else:
-                limpio = limpio.replace(",", "")    # miles
+                # 1,562 → miles US (sin decimal)
+                limpio = limpio.replace(",", "")
         elif tiene_punto:
             puntos = limpio.split(".")
             if len(puntos) > 2:
-                limpio = ("".join(puntos[:-1]) + "." + puntos[-1]) if len(puntos[-1]) == 2 \
-                         else limpio.replace(".", "")
+                # Múltiples puntos: 1.562.30 (raro). Tomar último como decimal si tiene 2 dígitos
+                if len(puntos[-1]) == 2:
+                    limpio = "".join(puntos[:-1]) + "." + puntos[-1]
+                else:
+                    limpio = limpio.replace(".", "")
             elif len(puntos) == 2 and len(puntos[1]) == 3:
-                limpio = limpio.replace(".", "")    # 1.000 → miles
+                # 1.000 → tres dígitos después del punto = miles
+                limpio = limpio.replace(".", "")
+            # Si len(puntos[1]) <= 2 dejamos como está (formato decimal estándar)
 
         return Decimal(limpio)
     except (InvalidOperation, Exception):
@@ -123,43 +142,81 @@ class FarmatodoPriceSpider(BaseSpider):
             """))
             return result.fetchall()
 
-    async def _save_precio(self, id_producto_crudo, precio_bruto: Decimal) -> None:
-        """Inserta un registro en historial_precios (VES / SCRAPING_WEB)."""
+    async def _save_precio(self, id_producto_crudo, precio_bruto_ves: Decimal) -> None:
+        """Convierte VES → USD con tasa BCV vigente y guarda como USD.
+
+        Razón: Farmatodo actualiza sus precios VES diariamente según la tasa
+        BCV. Si guardamos en VES, mañana la conversión a USD da un valor
+        distinto al real cuando cambia la tasa. Guardando en USD al momento
+        del scraping, el valor queda "anclado" al precio real del producto.
+        """
         async with AsyncSessionLocal() as session:
+            # Obtener la tasa BCV vigente
+            r = await session.execute(text("""
+                SELECT valor_usd FROM historico_tasa_bcv
+                ORDER BY fecha DESC LIMIT 1
+            """))
+            tasa = r.scalar()
+
+            if not tasa or tasa <= 0:
+                # Fallback: si no hay tasa, guardamos en VES para no perder dato
+                logger.warning(
+                    "No hay tasa BCV vigente — guardando precio en VES como fallback"
+                )
+                await session.execute(text("""
+                    INSERT INTO historial_precios
+                        (id_producto_crudo, precio_bruto, moneda_origen, fuente_datos)
+                    VALUES
+                        (:id_crudo, :precio, 'VES', 'SCRAPING_WEB')
+                """), {"id_crudo": str(id_producto_crudo), "precio": precio_bruto_ves})
+                await session.commit()
+                return
+
+            # Convertir a USD
+            precio_usd = (Decimal(str(precio_bruto_ves)) / Decimal(str(tasa))).quantize(
+                Decimal("0.0001")
+            )
             await session.execute(text("""
                 INSERT INTO historial_precios
                     (id_producto_crudo, precio_bruto, moneda_origen, fuente_datos)
                 VALUES
-                    (:id_crudo, :precio, 'VES', 'SCRAPING_WEB')
-            """), {"id_crudo": str(id_producto_crudo), "precio": precio_bruto})
+                    (:id_crudo, :precio, 'USD', 'SCRAPING_WEB')
+            """), {"id_crudo": str(id_producto_crudo), "precio": precio_usd})
             await session.commit()
 
     # ── Extracción Playwright ─────────────────────────────────────────────────
 
     async def _extract_price(self, page, url: str) -> Optional[Decimal]:
-        """Visita la URL del producto y extrae el precio con JS evaluation."""
+        """Visita la URL del producto y extrae el precio con JS evaluation.
+
+        Loggea SIEMPRE el texto crudo extraído del DOM para diagnóstico — así
+        si el parser falla podemos detectarlo en logs.
+        """
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             await page.wait_for_timeout(4000)   # Angular SSR delay
 
             precio_raw = await page.evaluate(PRICE_JS)
             if not precio_raw:
-                self.logger.warning(f"  ⚠️  Precio no encontrado: {url}")
+                self.logger.warning(f"  ⚠️  Precio no encontrado en DOM: {url}")
                 return None
 
             precio = _parse_precio(precio_raw)
             if precio is None:
-                self.logger.warning(f"  ⚠️  No se pudo parsear '{precio_raw}' → {url}")
-                return None
-
-            # Filtro placeholder: Farmatodo muestra "Bs. 0,01" cuando un producto
-            # no tiene precio en línea (agotado/sin disponibilidad). Lo descartamos
-            # para no contaminar la DB con precios irreales.
-            if precio < Decimal("1"):
                 self.logger.warning(
-                    f"  ⚠️  Precio placeholder detectado ({precio} Bs) — descartado: {url}"
+                    f"  ⚠️  No se pudo parsear precio raw='{precio_raw}' (chars: {[c for c in precio_raw[:40]]}) → {url}"
                 )
                 return None
+
+            # Filtro placeholder absoluto
+            if precio < Decimal("1"):
+                self.logger.warning(
+                    f"  ⚠️  Precio placeholder ({precio} Bs, raw='{precio_raw}') descartado: {url}"
+                )
+                return None
+
+            # Log diagnóstico: mostrar texto crudo + valor parseado
+            self.logger.debug(f"  💰 raw='{precio_raw}' → {precio} Bs ← {url}")
 
             return precio
 
