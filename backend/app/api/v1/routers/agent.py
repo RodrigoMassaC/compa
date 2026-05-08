@@ -284,7 +284,17 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
                 GREATEST(
                     similarity(LOWER(pm.nombre_estandar), :termino),
                     similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino)
-                ) as sim
+                ) as sim,
+                -- score_primario: 2 si el término aparece como sustantivo principal
+                -- al INICIO del nombre, 1 si aparece dentro de las primeras 3
+                -- palabras del nombre, 0 si aparece más adelante (probablemente
+                -- como modificador, ej. "Harina de Arroz" cuando se busca "arroz").
+                CASE
+                    WHEN LOWER(pm.nombre_estandar) ~ ('^' || :first_word || '\\M') THEN 2
+                    WHEN LOWER(pm.nombre_estandar) ~ ('^[a-záéíóúñ]+\\s+' || :first_word || '\\M') THEN 2
+                    WHEN LOWER(pm.nombre_estandar) ~ ('^([a-záéíóúñ]+\\s+){0,2}' || :first_word || '\\M') THEN 1
+                    ELSE 0
+                END as score_primario
             FROM productos_maestros pm
             WHERE LOWER(pm.nombre_estandar) ~ :rx
                OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
@@ -306,21 +316,26 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
         FROM candidatos cand
         JOIN precios_recientes pr ON pr.id_producto_maestro = cand.id_producto_maestro
         JOIN cadenas_comerciales c ON c.id_cadena = pr.id_cadena
-        -- DISTINCT ON por tienda toma el primero. Estrategia:
-        -- 1) bucket de similitud (alta >= 0.4 vs baja) — todos los matches que
-        --    pasaron la regex son al menos relevantes razonablemente.
-        -- 2) dentro del bucket alto, ordenamos por PRECIO ASC.
-        -- Así cada tienda devuelve el match más BARATO entre los relevantes,
-        -- que es lo que el usuario espera (ej. agua micelar Zoah > Valmy si
-        -- Zoah es más barato).
+        -- Estrategia de orden por tienda:
+        -- 1) score_primario DESC: el término al inicio del nombre gana
+        --    (ej. "Arroz Mary" sobre "Harina de Arroz" cuando se busca "arroz")
+        -- 2) bucket de similitud
+        -- 3) precio ASC: dentro del mismo nivel de relevancia, el más barato
         ORDER BY
           c.id_cadena,
+          cand.score_primario DESC,
           (CASE WHEN cand.sim >= 0.4 THEN 0 ELSE 1 END),
           precio_usd ASC NULLS LAST,
           cand.sim DESC NULLS LAST
     """)
 
-    result = await db.execute(query, {"termino": termino_norm, "rx": regex})
+    # Primera palabra significativa del término para el boost de score_primario
+    first_word = palabras[0] if palabras else termino_norm
+
+    result = await db.execute(
+        query,
+        {"termino": termino_norm, "rx": regex, "first_word": first_word},
+    )
     rows = result.mappings().all()
 
     return [
@@ -664,7 +679,7 @@ async def filtrar_relevantes(
 
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=150,
+        max_tokens=200,
         messages=[{
             "role": "user",
             "content": f"""Contexto: app venezolana de comparación de precios en supermercados y farmacias.
@@ -677,18 +692,29 @@ Productos candidatos (ya filtrados por substring):
 
 Tarea: indica los números de los productos que son razonablemente lo que el usuario busca.
 
-REGLAS:
-- Sé GENEROSO: mantén productos aunque tengan nombre largo o variantes (ej. "Omeprazol Cápsulas 20 mg Genven 14 unidades" es válido para "omeprazol").
-- SOLO excluye cuando el producto es claramente algo distinto:
-  * "azucar" → "Coca-Cola Sin Azúcar" → IRRELEVANTE
-  * "cebolla" → "Vela Bipa Blancas" → IRRELEVANTE
-  * "leche" → "Crema de Leche" → MANTENER (es derivado válido)
-  * "tomate" → "Salsa de Tomate" → MANTENER (es derivado válido para muchas búsquedas)
-- En duda, MANTÉN el producto (mejor mostrar opciones que no mostrar nada).
+REGLAS DE EXCLUSIÓN — IMPORTANTE:
+Si el usuario pidió un PRODUCTO BÁSICO sin más contexto, descarta los derivados procesados que NO son ese producto:
+- "arroz" (sin más contexto) → arroz blanco/integral suelto. EXCLUIR: "Harina de Arroz", "Crema de Arroz Infantil", "Arroz con Leche envasado", "Postre de Arroz".
+- "tomate" → tomate fresco o salsa. EXCLUIR: "Té de Tomate", "Aceite de Tomate".
+- "leche" → leche líquida o polvo. MANTENER: "Crema de Leche" (derivado común). EXCLUIR: "Sabor a Leche".
+- "azúcar" → azúcar en bolsa. EXCLUIR: "Coca-Cola Sin Azúcar", "Galletas con Azúcar".
+- "harina" → harina de trigo o maíz. EXCLUIR si es muy específico tipo "Harina infantil de cereales 8 sabores".
+- "café" → café molido/grano. EXCLUIR: "Helado sabor café", "Crema de café".
+- "pollo" → pollo crudo. EXCLUIR: "Salsa sabor pollo", "Caldo en cubo".
+
+REGLAS DE INCLUSIÓN — sé razonable:
+- Variantes legítimas del producto: marcas, presentaciones, sabores → MANTENER
+- Si el usuario PIDIÓ específicamente el derivado (ej. "harina de arroz") → MANTENER ese derivado
+- En duda razonable, MANTÉN
+
+EJEMPLOS:
+- buscó "arroz" → "Mary Arroz Tipo I 1 kg" (MANTENER), "Harina Pan de Arroz" (EXCLUIR — es harina, no arroz)
+- buscó "harina de arroz" → "Harina Pan de Arroz 1 kg" (MANTENER — usuario pidió eso)
+- buscó "pasta de dientes" → "Colgate Crema Dental 75 ml" (MANTENER — es lo mismo en VE)
 
 Formato: números separados por comas. Ejemplo: 1,3,5
 Si todos son razonablemente relevantes: todos
-Si NINGUNO es razonable (raro): ninguno"""
+Si NINGUNO es razonable: ninguno"""
         }]
     )
 
@@ -740,9 +766,22 @@ Opciones de respuesta:
 
 REGLAS DE TÉRMINOS:
 - Palabras clave en español, máximo 2-3 palabras cada uno.
-- Genera variantes útiles del producto base. Ejemplos:
+- Genera variantes útiles del producto base.
+- DEBES expandir términos coloquiales venezolanos a sus equivalentes formales:
+  - "pasta de dientes" / "pasta dental" → ["crema dental", "pasta dental", "dentífrico"]
+  - "papel toilette" / "papel toilet" → ["papel higiénico", "papel toilette"]
+  - "harina precocida" / "harina P.A.N." → ["harina precocida de maíz", "harina pan", "harina P.A.N."]
+  - "harina de trigo" → ["harina de trigo", "harina todo uso"]
+  - "guayoyo" / "café guayoyo" → ["café molido", "café"]
+  - "cocacola" / "coca cola" → ["coca-cola", "refresco cola"]
+  - "tampones" → ["tampones", "tampones higiénicos"]
+  - "toallas higiénicas" / "kotex" → ["toallas sanitarias", "toallas higiénicas"]
+  - "lechuga" → ["lechuga"]
+  - "papas" / "papas fritas" → ["papas fritas", "snacks de papa"]
+  - "pollo crudo" / "pollo entero" → ["pollo entero", "pollo crudo"]
   - "leche" → ["leche", "leche entera"]
   - "acetaminofen" → ["acetaminofen", "paracetamol"]
+  - "pañales" → ["pañales", "pañales bebé"]
 
 REGLAS DE FILTROS — CRÍTICO PARA PRECISIÓN:
 Cuando el usuario menciona atributos específicos, EXTRÁELOS al objeto "filtros":
