@@ -21,40 +21,63 @@ URLS_DEBUG = [
     "https://www.farmatodo.com.ve/producto/112784381-jabon-en-barra-lux-rosas-francesas",
 ]
 
-# JS que extrae TODOS los elementos con "Bs" en el texto y sus selectores
+# JS que extrae JSON-LD + availability + indicadores de stock
 INSPECT_JS = """
 () => {
     const result = {
-        all_bs_elements: [],
-        meta_price: null,
-        json_ld: null,
+        json_ld_price: null,
+        json_ld_currency: null,
+        json_ld_availability: null,
+        json_ld_full: null,
+        bs_elements_main: [],
+        boton_carrito: null,
+        texto_agotado: false,
     };
-
-    // Todos los elementos con "Bs" en su texto
-    const all = document.querySelectorAll('*');
-    for (const el of all) {
-        const text = el.innerText || '';
-        if (text.includes('Bs') && /\\d/.test(text) && el.children.length === 0 && text.length < 100) {
-            result.all_bs_elements.push({
-                tag: el.tagName,
-                class: el.className,
-                id: el.id,
-                text: text.trim(),
-            });
-        }
-    }
-
-    // Meta tags con price
-    const meta = document.querySelector('meta[property="product:price:amount"], meta[itemprop="price"]');
-    if (meta) result.meta_price = meta.getAttribute('content');
 
     // JSON-LD structured data
     const ld = document.querySelector('script[type="application/ld+json"]');
     if (ld) {
         try {
             const data = JSON.parse(ld.textContent);
-            result.json_ld = JSON.stringify(data).slice(0, 500);
-        } catch (e) {}
+            const offer = data.offers || {};
+            result.json_ld_price = offer.price || null;
+            result.json_ld_currency = offer.priceCurrency || null;
+            result.json_ld_availability = offer.availability || null;
+            result.json_ld_full = JSON.stringify(data).slice(0, 1500);
+        } catch (e) {
+            result.json_ld_full = 'PARSE ERROR: ' + e.message;
+        }
+    }
+
+    // Botón "Agregar al carrito" — si está disabled o no existe, sin stock
+    const btnCart = document.querySelector('button[class*="cart"], button[class*="add"], [class*="add-to-cart"]');
+    if (btnCart) {
+        result.boton_carrito = {
+            disabled: btnCart.disabled || btnCart.classList.contains('disabled'),
+            text: (btnCart.innerText || '').trim().slice(0, 60),
+        };
+    }
+
+    // Texto "agotado" / "sin stock" en cualquier parte
+    const bodyText = (document.body.innerText || '').toLowerCase();
+    result.texto_agotado = bodyText.includes('agotado') ||
+                           bodyText.includes('sin stock') ||
+                           bodyText.includes('no disponible') ||
+                           bodyText.includes('out of stock');
+
+    // Elementos con precio del bloque principal
+    const purchaseBlock = document.querySelector('.product-purchase, [class*="product-purchase"]');
+    if (purchaseBlock) {
+        const all = purchaseBlock.querySelectorAll('*');
+        for (const el of all) {
+            const text = el.innerText || '';
+            if (text.includes('Bs') && /\\d/.test(text) && el.children.length === 0 && text.length < 80) {
+                result.bs_elements_main.push({
+                    class: el.className,
+                    text: text.trim(),
+                });
+            }
+        }
     }
 
     return result;
@@ -82,13 +105,15 @@ async def main():
 
                 data = await page.evaluate(INSPECT_JS)
 
-                print(f"\n📊 Meta price: {data['meta_price']}")
-                print(f"\n📊 JSON-LD: {data['json_ld']}\n")
-
-                print(f"📊 Elementos con 'Bs' encontrados: {len(data['all_bs_elements'])}\n")
-                for i, el in enumerate(data['all_bs_elements'][:15]):
-                    print(f"  [{i+1}] <{el['tag']} class='{el['class']}' id='{el['id']}'>")
-                    print(f"       texto: '{el['text']}'")
+                print(f"\n💰 JSON-LD price:        {data.get('json_ld_price')}")
+                print(f"💰 JSON-LD currency:     {data.get('json_ld_currency')}")
+                print(f"📦 JSON-LD availability: {data.get('json_ld_availability')}")
+                print(f"🛒 Botón carrito:        {data.get('boton_carrito')}")
+                print(f"⚠️  Texto agotado:        {data.get('texto_agotado')}")
+                print(f"\n📊 Elementos 'Bs' del bloque PRINCIPAL ({len(data.get('bs_elements_main', []))}):")
+                for i, el in enumerate(data.get('bs_elements_main', [])):
+                    print(f"  [{i+1}] class='{el['class']}'  →  {el['text']}")
+                print(f"\n📊 JSON-LD full (truncado):\n{data.get('json_ld_full')}")
 
             except Exception as e:
                 print(f"❌ Error: {e}")
