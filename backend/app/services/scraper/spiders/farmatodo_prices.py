@@ -26,10 +26,19 @@ from app.schemas.scraper_schema import ScrapedProduct
 from app.services.scraper.base_spider import BaseSpider
 
 
-# JavaScript que extrae el precio del DOM renderizado de Farmatodo (Angular 12).
-# Prueba selectores conocidos en orden y hace fallback a búsqueda por texto "Bs.".
+# JavaScript que extrae el precio + verifica que el producto esté disponible.
+# Si el botón "Agregar producto" está disabled → producto descontinuado o sin
+# stock → retorna __UNAVAILABLE__ en lugar del precio (Farmatodo deja productos
+# descontinuados con precios viejos en su web).
 PRICE_JS = """
 () => {
+    // 1. Verificar disponibilidad: el botón disabled indica descontinuado
+    const btn = document.querySelector('.product-purchase__add-btn, button[class*="add-btn"]');
+    if (btn && (btn.disabled || (btn.className || '').includes('disabled'))) {
+        return '__UNAVAILABLE__';
+    }
+
+    // 2. Extraer precio
     const selectors = [
         'div.product-purchase__price span',
         '.product-purchase__price--active',
@@ -199,6 +208,11 @@ class FarmatodoPriceSpider(BaseSpider):
             precio_raw = await page.evaluate(PRICE_JS)
             if not precio_raw:
                 self.logger.warning(f"  ⚠️  Precio no encontrado en DOM: {url}")
+                return None
+
+            # Producto descontinuado o sin stock → no guardar
+            if precio_raw == "__UNAVAILABLE__":
+                self.logger.info(f"  📦 Producto no disponible (botón disabled) — descartado: {url[-60:]}")
                 return None
 
             precio = _parse_precio(precio_raw)
