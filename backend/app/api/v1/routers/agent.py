@@ -128,7 +128,9 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
     # Usamos el primer término (el principal) como query
     embedding_ids: set[str] = set()
     if terminos and settings.openai_api_key:
-        ids_top = await buscar_por_embedding(terminos[0], db, top_k=30)
+        # top_k=80 para cubrir casos donde el embedding dispersa por términos
+        # genéricos (ej. "pasta de dientes 100ml" matchea muchas cremas dentales).
+        ids_top = await buscar_por_embedding(terminos[0], db, top_k=80)
         embedding_ids = set(ids_top)
 
     for termino in terminos[:3]:  # Máximo 3 términos para no sobrecargar
@@ -198,7 +200,7 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             JOIN precios_recientes pr ON pr.id_producto_maestro = c.id_producto_maestro
             JOIN cadenas_comerciales cc ON cc.id_cadena = pr.id_cadena
             ORDER BY c.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
-            LIMIT 20
+            LIMIT 50
         """)
 
         # Regex POSIX: "(cebolla|blanca)" — debe contener al menos una palabra
@@ -346,7 +348,7 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
     # Capa A: embeddings (semántico)
     embedding_ids: list[str] = []
     if settings.openai_api_key:
-        embedding_ids = await buscar_por_embedding(termino, db, top_k=20)
+        embedding_ids = await buscar_por_embedding(termino, db, top_k=50)
 
     # Regex: debe contener al menos una de las palabras significativas
     regex = "(" + "|".join(palabras) + ")"
@@ -710,6 +712,15 @@ def _aplicar_filtros(productos: list[dict], filtros: dict) -> list[dict]:
     atributos_q = [a.strip().lower() for a in (filtros.get("atributos") or []) if a]
     dosis_q = filtros.get("dosis_mg")
     envase_q = (filtros.get("tipo_envase") or "").strip().lower()
+    tienda_q = (filtros.get("tienda") or "").strip().lower()
+    tienda_map = {
+        "farmatodo": "Farmatodo",
+        "farmago": "Farmago",
+        "locatel": "Locatel",
+        "central_madeirense": "Central Madeirense",
+        "excelsior_gama": "Excelsior Gama",
+    }
+    tienda_q_db = tienda_map.get(tienda_q, "") if tienda_q else ""
 
     grupo_pres_q = _grupo_presentacion(presentacion_q) if presentacion_q else None
     grupo_env_q = _grupo_presentacion(envase_q) if envase_q else None
@@ -720,6 +731,17 @@ def _aplicar_filtros(productos: list[dict], filtros: dict) -> list[dict]:
         marca = (p.get("marca") or "").lower()
         presentacion = (p.get("presentacion") or "").lower()
         haystack = f"{nombre} {marca} {presentacion}"
+
+        # Tienda: si el usuario la especificó, el producto debe tener oferta
+        # en esa tienda. Filtramos las ofertas para mostrar solo esa tienda.
+        if tienda_q_db:
+            ofertas_tienda = [
+                o for o in (p.get("ofertas") or []) if o.get("tienda") == tienda_q_db
+            ]
+            if not ofertas_tienda:
+                continue
+            # Reescribimos las ofertas del producto a solo la tienda pedida
+            p["ofertas"] = ofertas_tienda
 
         # Marca: si el usuario la especificó, debe aparecer en nombre/marca
         if marca_q and marca_q not in haystack:
@@ -867,9 +889,18 @@ Opciones de respuesta:
     "presentacion": null,
     "atributos": [],
     "dosis_mg": null,
-    "tipo_envase": null
+    "tipo_envase": null,
+    "tienda": null
   }
 }
+
+REGLA TIENDA: si el usuario menciona una tienda específica ("en Farmatodo",
+"de Locatel", "Farmago tiene"), extrae su nombre normalizado a:
+"farmatodo", "farmago", "locatel", "central_madeirense", "excelsior_gama".
+Ejemplos:
+- "Colgate de 100ml en farmatodo" → tienda: "farmatodo"
+- "Tienen omeprazol en Locatel?" → tienda: "locatel"
+- "qué tiene Madeirense?" → tienda: "central_madeirense"
 
 REGLAS DE TÉRMINOS:
 - Palabras clave en español, máximo 2-3 palabras cada uno.
