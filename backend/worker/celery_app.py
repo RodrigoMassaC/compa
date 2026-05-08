@@ -90,5 +90,13 @@ celery_app.conf.update(
             "task": "worker.tasks.run_normalizador",
             "schedule": crontab(minute=0, hour=3),
         },
+
+        # ── Refrescar embeddings cada 10 min ────────────────────────────────
+        # Genera embeddings para productos nuevos o modificados.
+        # Costo despreciable (~$0.000001 por producto).
+        "refrescar-embeddings": {
+            "task": "worker.tasks.refrescar_embeddings",
+            "schedule": crontab(minute="*/10"),
+        },
     },
 )

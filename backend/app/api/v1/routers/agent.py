@@ -38,17 +38,67 @@ class ChatResponse(BaseModel):
 # Búsqueda en DB — acepta lista de términos para mayor cobertura
 # ---------------------------------------------------------------------------
 
+async def buscar_por_embedding(
+    query_text: str,
+    db: AsyncSession,
+    top_k: int = 30,
+) -> list[str]:
+    """
+    Búsqueda por similitud semántica (vectorial) usando pgvector.
+    Retorna lista de id_producto_maestro ordenados de más a menos similares.
+
+    Si OPENAI_API_KEY no está configurada o pgvector falla, retorna [] y
+    el caller debe usar búsqueda por texto como fallback.
+    """
+    if not settings.openai_api_key:
+        return []
+    try:
+        from app.services.embeddings.embedder import generar_embedding
+        embedding = await generar_embedding(query_text)
+    except Exception as e:
+        logger.warning(f"buscar_por_embedding: error generando embedding: {e}")
+        return []
+
+    vector_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    try:
+        result = await db.execute(text("""
+            SELECT id_producto_maestro,
+                   1 - (embedding <=> CAST(:vec AS vector)) AS similitud
+            FROM productos_maestros
+            WHERE embedding IS NOT NULL
+              AND 1 - (embedding <=> CAST(:vec AS vector)) >= :min_sim
+            ORDER BY embedding <=> CAST(:vec AS vector)
+            LIMIT :top_k
+        """), {
+            "vec": vector_str,
+            "top_k": top_k,
+            "min_sim": settings.embeddings_similarity_min,
+        })
+        return [str(row.id_producto_maestro) for row in result.fetchall()]
+    except Exception as e:
+        logger.warning(f"buscar_por_embedding: error en SQL: {e}")
+        return []
+
+
 async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
     """
     Busca productos usando múltiples términos.
 
-    Estrategia: requiere SUBSTRING match de al menos una palabra significativa
-    del término en el nombre, terminos_busqueda o marca. Esto evita falsos
-    positivos del trigram como "cebolla" → "Vela Bipa Blancas".
+    Estrategia híbrida:
+    1. Búsqueda por embedding (semántica) — captura sinónimos y coloquialismos
+    2. Búsqueda por substring/trigram — captura matches exactos y typos
+    3. Combinación + deduplicación
 
-    Retorna hasta 8 productos maestros únicos con todas sus ofertas.
+    Si embeddings no disponibles, fallback a búsqueda solo por texto.
     """
     todos = {}
+
+    # ── Capa A: búsqueda semántica (embeddings) ──
+    # Usamos el primer término (el principal) como query
+    embedding_ids: set[str] = set()
+    if terminos and settings.openai_api_key:
+        ids_top = await buscar_por_embedding(terminos[0], db, top_k=30)
+        embedding_ids = set(ids_top)
 
     for termino in terminos[:3]:  # Máximo 3 términos para no sobrecargar
         termino_norm = _normalizar_termino(termino)
@@ -95,6 +145,8 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                 WHERE LOWER(pm.nombre_estandar) ~ :rx
                    OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
                    OR LOWER(COALESCE(pm.marca, '')) ~ :rx
+                   -- También aceptamos los IDs que vinieron del embedding (capa A)
+                   OR (pm.id_producto_maestro::text = ANY(:emb_ids))
             )
             SELECT
                 c.id_producto_maestro,
@@ -125,12 +177,17 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
         result = await db.execute(query, {
             "termino": termino_norm,
             "rx": regex,
+            "emb_ids": list(embedding_ids),
         })
         rows = result.mappings().all()
 
         for row in rows:
             pid = str(row["id_producto_maestro"])
             sim = float(row["sim"] or 0)
+            # Si el producto vino por embedding, dar boost a su sim para que
+            # rankee bien aunque la similitud trigram sea baja
+            if pid in embedding_ids and sim < 0.3:
+                sim = 0.5
 
             if pid not in todos:
                 todos[pid] = {
@@ -245,17 +302,20 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
     """
     Para un término, retorna el producto más barato disponible en cada tienda.
 
-    Estrategia: exige que alguna palabra significativa del término aparezca
-    en nombre_estandar, terminos_busqueda o marca (substring match). Esto
-    evita ruido del trigram (ej. "cebolla" → "Vela Bipa Blancas").
-
-    El producto cuyo nombre contiene MÁS palabras del término se prefiere
-    (relevancia), y en caso de empate se toma el más barato por tienda.
+    Estrategia híbrida:
+    1. Búsqueda semántica (embeddings) — captura sinónimos venezolanos
+    2. Búsqueda por substring (regex) — captura matches exactos
+    3. Combinación: el SQL incluye ambos como candidatos
     """
     termino_norm = _normalizar_termino(termino)
     palabras = [p for p in termino_norm.split() if len(p) >= 3]
     if not palabras:
         palabras = [termino_norm]
+
+    # Capa A: embeddings (semántico)
+    embedding_ids: list[str] = []
+    if settings.openai_api_key:
+        embedding_ids = await buscar_por_embedding(termino, db, top_k=20)
 
     # Regex: debe contener al menos una de las palabras significativas
     regex = "(" + "|".join(palabras) + ")"
@@ -299,6 +359,7 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
             WHERE LOWER(pm.nombre_estandar) ~ :rx
                OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
                OR LOWER(COALESCE(pm.marca, '')) ~ :rx
+               OR (pm.id_producto_maestro::text = ANY(:emb_ids))
         )
         SELECT DISTINCT ON (c.id_cadena)
             c.nombre_cadena,
@@ -334,7 +395,12 @@ async def buscar_item_por_tienda(termino: str, db: AsyncSession) -> list[dict]:
 
     result = await db.execute(
         query,
-        {"termino": termino_norm, "rx": regex, "first_word": first_word},
+        {
+            "termino": termino_norm,
+            "rx": regex,
+            "first_word": first_word,
+            "emb_ids": embedding_ids,
+        },
     )
     rows = result.mappings().all()
 

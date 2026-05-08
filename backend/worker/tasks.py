@@ -204,3 +204,20 @@ def run_normalizador(self):
     except Exception as exc:
         logger.error("run_normalizador falló: %s", exc)
         raise self.retry(exc=exc, countdown=600)
+
+
+@celery_app.task(name="worker.tasks.refrescar_embeddings", bind=True, max_retries=2)
+def refrescar_embeddings(self):
+    """Genera embeddings para productos_maestros que no tienen o están stale.
+
+    Corre cada 10 minutos vía Beat schedule. En producción normal solo
+    procesa 0-50 productos por corrida (los nuevos del scraper).
+    """
+    try:
+        from app.services.embeddings.indexar_productos import main as indexar_main
+        logger.info("refrescar_embeddings: iniciando...")
+        _run_async(indexar_main(batch_size=50))
+        logger.info("refrescar_embeddings: completado")
+    except Exception as exc:
+        logger.error("refrescar_embeddings falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)

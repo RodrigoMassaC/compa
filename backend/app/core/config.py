@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # ── Embeddings (búsqueda semántica con pgvector) ──
+    embeddings_provider: str = "openai"   # solo "openai" por ahora
+    embeddings_model: str = "text-embedding-3-small"
+    embeddings_dimensions: int = 1536     # text-embedding-3-small → 1536
+    # Threshold de cercanía coseno (0-1). >= 0.5 es relevante; >= 0.65 muy relevante.
+    embeddings_similarity_min: float = 0.30
+    # Si el TOP match está por debajo de este threshold, devolvemos "no encontrado"
+    embeddings_no_match_below: float = 0.25
+
     # ── DeepSeek (usado por el normalizador masivo) ──
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-v4-flash"

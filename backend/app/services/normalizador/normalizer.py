@@ -545,6 +545,39 @@ class NormalizadorIA:
                 nuevo_id = result.scalar()
                 self.stats["nuevos_maestros"] += 1
                 logger.debug(f"Nuevo maestro creado: '{nombre_estandar}'")
+
+                # Generar embedding del producto recién creado.
+                # Si OpenAI falla, no rompemos — el task de Celery lo
+                # actualizará en su próxima corrida (cada 10 min).
+                if settings.openai_api_key:
+                    try:
+                        from app.services.embeddings.embedder import (
+                            texto_para_embedding, hash_texto, generar_embedding
+                        )
+                        texto = texto_para_embedding(
+                            nombre_estandar,
+                            datos.get("marca"),
+                            datos.get("presentacion"),
+                            datos.get("terminos_busqueda"),
+                        )
+                        emb = await generar_embedding(texto)
+                        vector_str = "[" + ",".join(str(x) for x in emb) + "]"
+                        async with self.AsyncSession() as s2:
+                            await s2.execute(text("""
+                                UPDATE productos_maestros
+                                SET embedding = :emb,
+                                    embedding_texto_hash = :hash,
+                                    embedding_actualizado_en = NOW()
+                                WHERE id_producto_maestro = :id
+                            """), {
+                                "emb": vector_str,
+                                "hash": hash_texto(texto),
+                                "id": str(nuevo_id),
+                            })
+                            await s2.commit()
+                    except Exception as e:
+                        logger.warning(f"No se pudo generar embedding inmediato: {e}")
+
                 return nuevo_id
 
     async def _vincular(self, id_producto_crudo: UUID, id_producto_maestro: UUID):
