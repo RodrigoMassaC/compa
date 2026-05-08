@@ -38,6 +38,35 @@ class ChatResponse(BaseModel):
 # Búsqueda en DB — acepta lista de términos para mayor cobertura
 # ---------------------------------------------------------------------------
 
+# Sinónimos coloquiales venezolanos para enriquecer el query del embedding.
+# Si el usuario usa el lado izquierdo, expandimos con el derecho para que
+# el vector apunte mejor al concepto real (ej. "pasta dental" → "pasta dental
+# crema dental dentífrico higiene bucal" en vez de solo "pasta dental"
+# que se puede confundir con pasta de comer).
+SINONIMOS_VE = {
+    "pasta dental": "crema dental dentífrico higiene bucal",
+    "pasta de dientes": "crema dental dentífrico higiene bucal",
+    "papel toilette": "papel higiénico",
+    "papel toilet": "papel higiénico",
+    "guayoyo": "café molido café",
+    "harina precocida": "harina pan harina P.A.N. harina de maíz",
+    "harina P.A.N.": "harina precocida harina de maíz",
+    "kotex": "toallas sanitarias toallas higiénicas femeninas",
+    "cocacola": "coca-cola refresco cola",
+    "papas fritas": "papas fritas snacks de papa chips",
+}
+
+
+def _expandir_query_para_embedding(query: str) -> str:
+    """Si el query contiene un coloquialismo conocido, lo expande con
+    sinónimos para que el embedding apunte mejor al concepto real."""
+    q_low = query.lower().strip()
+    for coloquial, expansion in SINONIMOS_VE.items():
+        if coloquial in q_low:
+            return f"{query} {expansion}"
+    return query
+
+
 async def buscar_por_embedding(
     query_text: str,
     db: AsyncSession,
@@ -54,7 +83,9 @@ async def buscar_por_embedding(
         return []
     try:
         from app.services.embeddings.embedder import generar_embedding
-        embedding = await generar_embedding(query_text)
+        # Enriquecer el query con sinónimos coloquiales venezolanos
+        query_expandido = _expandir_query_para_embedding(query_text)
+        embedding = await generar_embedding(query_expandido)
     except Exception as e:
         logger.warning(f"buscar_por_embedding: error generando embedding: {e}")
         return []
@@ -433,27 +464,37 @@ async def filtrar_carrito_batch(matches: list[dict], client) -> set[int]:
 
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=200,
+        max_tokens=300,
         messages=[{
             "role": "user",
             "content": (
-                "Eres un filtro para una app de comparación de precios. Sé GENEROSO: "
-                "solo descarta lo claramente irrelevante. En duda, MANTÉN.\n\n"
-                "DESCARTAR (IRRELEVANTE) solo si:\n"
-                "- El término aparece como ingrediente secundario o descripción negativa "
-                "(buscó 'azúcar' → 'Coca-Cola Sin Azúcar' → IRRELEVANTE)\n"
-                "- El producto es una categoría totalmente distinta "
-                "(buscó 'cebolla' → 'Vela Bipa Blancas' → IRRELEVANTE)\n"
-                "- El usuario pidió específicamente el básico y solo hay derivados muy procesados "
-                "(buscó 'leche fresca' → 'Crema de Leche Concentrada Industrial' → IRRELEVANTE)\n\n"
-                "MANTENER (relevante) — sé permisivo:\n"
-                "- Match exacto, variantes razonables\n"
-                "- Productos con nombre largo, marca, presentación variada (todos OK)\n"
-                "- Derivados que pueden servir (buscó 'tomate' → 'Salsa de Tomate' → MANTENER)\n"
-                "- Distintas presentaciones del mismo medicamento o producto (todas OK)\n\n"
+                "Eres un filtro ESTRICTO para una app de comparación de precios.\n\n"
+                "Tu tarea: para cada línea, decidir si el producto SÍ es lo que el usuario pidió.\n\n"
+                "PRINCIPIO: descarta cuando el match es por PALABRA SUELTA pero el "
+                "PRODUCTO es de OTRA CATEGORÍA. La palabra coincidente puede ser solo un sustantivo "
+                "homónimo (ej. 'pasta' significa pasta de dientes O pasta de comer — son distintos).\n\n"
+                "REGLAS DE EXCLUSIÓN — DESCARTA si:\n"
+                "1. CATEGORÍA DISTINTA: el producto es de otra categoría aunque comparta una palabra:\n"
+                "   - 'pasta dental' / 'pasta de dientes' → 'Pasta para Comer / Espaguetis / Pluma' → IRRELEVANTE\n"
+                "   - 'pasta dental' → 'Pasta de Lassar Pomada' (dermatológica) → IRRELEVANTE\n"
+                "   - 'salsa de tomate' o 'ketchup' → 'Pasta Napolitana / Salsa de Pasta' → IRRELEVANTE\n"
+                "   - 'crema dental' → 'Crema de Manos / Crema Hidratante' → IRRELEVANTE\n"
+                "   - 'arroz' (a secas) → 'Harina Pan de Arroz / Crema de Arroz Infantil' → IRRELEVANTE\n"
+                "   - 'cebolla' → 'Vela Bipa / Encurtido de Cebolla' → IRRELEVANTE\n"
+                "   - 'azúcar' → 'Coca-Cola Sin Azúcar' → IRRELEVANTE\n"
+                "   - 'agua micelar' → 'Agua Mineral / Agua Tónica' → IRRELEVANTE\n"
+                "2. INGREDIENTE SECUNDARIO: el término solo aparece como ingrediente descriptivo:\n"
+                "   - 'leche' → 'Galletas con Leche' → IRRELEVANTE (es galleta, no leche)\n"
+                "3. NEGACIÓN: 'Sin X' cuando se busca 'X':\n"
+                "   - 'gluten' → 'Sin Gluten' → IRRELEVANTE si pidió gluten\n\n"
+                "REGLAS DE INCLUSIÓN — MANTÉN si:\n"
+                "1. Match directo o variantes legítimas: 'crema dental Colgate' → 'Colgate Crema Dental Menta' (OK)\n"
+                "2. Marcas distintas del mismo tipo de producto (siempre OK)\n"
+                "3. Distintas presentaciones del mismo producto (OK)\n"
+                "4. Derivados aceptables: 'tomate' → 'Salsa de Tomate' (OK si no especificó fresco)\n\n"
                 f"Productos a revisar:\n{lineas}\n\n"
-                "Responde SOLO con los números de los IRRELEVANTES separados por coma. "
-                "Si todos son razonables responde: ninguno"
+                "Responde SOLO con los números de los IRRELEVANTES separados por coma.\n"
+                "Si TODOS son razonables responde: ninguno"
             )
         }]
     )
