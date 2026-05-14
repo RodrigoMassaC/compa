@@ -221,3 +221,36 @@ def refrescar_embeddings(self):
     except Exception as exc:
         logger.error("refrescar_embeddings falló: %s", exc)
         raise self.retry(exc=exc, countdown=300)
+
+
+@celery_app.task(name="worker.tasks.expirar_pagos_pending", bind=True, max_retries=1)
+def expirar_pagos_pending(self):
+    """Marca como 'expired' los pagos pending que llevan más de N minutos.
+
+    Esto libera el concepto (CR######) para que se pueda reutilizar
+    y mantiene la DB limpia.
+    """
+    try:
+        async def _expirar():
+            from sqlalchemy import text
+            from app.core.database import AsyncSessionLocal
+            from app.core.config import settings
+            ttl = settings.pago_pending_ttl_min
+            async with AsyncSessionLocal() as session:
+                r = await session.execute(text(f"""
+                    UPDATE pagos_bolivares
+                    SET status = 'expired',
+                        actualizado_en = NOW()
+                    WHERE status = 'pending'
+                      AND creado_en < NOW() - INTERVAL '{ttl} minutes'
+                    RETURNING id_pago
+                """))
+                ids = [row.id_pago for row in r.fetchall()]
+                await session.commit()
+                if ids:
+                    logger.info("expirar_pagos_pending: %d pagos marcados como expired", len(ids))
+                return len(ids)
+        _run_async(_expirar())
+    except Exception as exc:
+        logger.error("expirar_pagos_pending falló: %s", exc)
+        raise self.retry(exc=exc, countdown=300)

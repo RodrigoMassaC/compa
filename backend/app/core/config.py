@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     # Provider del normalizador: "deepseek" o "anthropic"
     normalizador_provider: str = "deepseek"
 
+    # ── R4 Conecta / Mibanco (Pago Móvil Conciliado) ──
+    r4_api_base:           str = "https://r4conecta.mibanco.com.ve"
+    r4_commerce_id:        str = ""   # RIF del comercio (ej. J507982904)
+    r4_commerce_token:     str = ""   # HMAC secret entregado por Mibanco
+    r4_commerce_phone:     str = ""   # Teléfono destino del pago móvil (04XXXXXXXXX)
+    r4_commerce_bank:      str = "0169"   # Banco destino (Mibanco = 0169)
+    r4_webhook_token:      str = ""   # UUID que enviamos a Mibanco para validar webhooks entrantes
+    # IPs autorizadas de R4 (para validar webhooks entrantes) — comma-separated
+    r4_allowed_ips:        str = "45.175.213.98,200.74.203.91,204.199.249.3"
+    # Duración de un pago pending antes de marcarlo expired (minutos)
+    pago_pending_ttl_min:  int = 30
+
     # ── Meta / WhatsApp ──
     meta_whatsapp_token: str = ""
     meta_phone_number_id: str = ""

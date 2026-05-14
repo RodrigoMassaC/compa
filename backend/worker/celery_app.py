@@ -92,11 +92,16 @@ celery_app.conf.update(
         },
 
         # ── Refrescar embeddings cada 10 min ────────────────────────────────
-        # Genera embeddings para productos nuevos o modificados.
-        # Costo despreciable (~$0.000001 por producto).
         "refrescar-embeddings": {
             "task": "worker.tasks.refrescar_embeddings",
             "schedule": crontab(minute="*/10"),
+        },
+
+        # ── Expirar pagos pending cada 5 min ────────────────────────────────
+        # Libera conceptos CR###### que el usuario nunca llegó a pagar.
+        "expirar-pagos-pending": {
+            "task": "worker.tasks.expirar_pagos_pending",
+            "schedule": crontab(minute="*/5"),
         },
     },
 )
