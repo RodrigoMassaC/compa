@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { getToken, getUser, planLabel, type AuthUser } from "@/lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
@@ -17,9 +18,12 @@ interface QuotaData {
 }
 
 export default function ConsultasPage() {
+  const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [quota, setQuota] = useState<QuotaData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [comprando, setComprando] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const u = getUser();
@@ -35,6 +39,37 @@ export default function ConsultasPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  async function comprar(tipo: "consultas_pack_30" | "plan_ilimitado_mensual") {
+    setError(null);
+    const token = getToken();
+    if (!token) {
+      router.push("/auth");
+      return;
+    }
+
+    setComprando(tipo);
+    try {
+      const res = await fetch(`${API}/payments/pago-movil/crear`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ tipo_producto: tipo }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error al crear el pago");
+      }
+      const data = await res.json();
+      // Redirige a la página de pago con el concepto generado
+      router.push(`/comprar/${data.concepto}`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al crear el pago");
+      setComprando(null);
+    }
+  }
 
   const mesLabel = quota?.mes
     ? new Date(quota.mes + "-01").toLocaleString("es-VE", { month: "long", year: "numeric" })
@@ -104,54 +139,62 @@ export default function ConsultasPage() {
         </div>
 
         {/* Comprar más consultas */}
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
-          <h2 className="text-lg font-extrabold text-slate-900 mb-1">Agregar consultas</h2>
-          <p className="text-sm text-slate-400 mb-6">
-            Necesitas más consultas este mes? Agrega un paquete adicional.
-          </p>
+        {user && (
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
+            <h2 className="text-lg font-extrabold text-slate-900 mb-1">Agregar consultas</h2>
+            <p className="text-sm text-slate-400 mb-6">
+              Paga con Pago Móvil desde cualquier banco venezolano. Conciliación automática.
+            </p>
 
-          <div className="grid gap-4">
-            {/* Paquete único */}
-            <div className="border border-slate-200 rounded-2xl p-5 flex items-center justify-between">
-              <div>
-                <p className="font-bold text-slate-800">+20 consultas</p>
-                <p className="text-sm text-slate-400">Válidas para el mes actual</p>
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                {error}
               </div>
-              <div className="text-right">
-                <p className="text-lg font-extrabold text-slate-900">$2 USD</p>
-                <button
-                  disabled
-                  className="mt-2 bg-slate-100 text-slate-400 font-bold text-sm px-5 py-2 rounded-full cursor-not-allowed"
-                  title="Próximamente"
-                >
-                  Próximamente
-                </button>
+            )}
+
+            <div className="grid gap-4">
+              {/* Pack 30 consultas */}
+              <div className="border border-slate-200 rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-slate-800">Pack +30 consultas</p>
+                  <p className="text-sm text-slate-400">Compra única. No expiran.</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-extrabold text-slate-900">$1.50</p>
+                  <button
+                    onClick={() => comprar("consultas_pack_30")}
+                    disabled={comprando !== null}
+                    className="mt-2 bg-[#3C5ACB] hover:bg-[#2F47A8] disabled:bg-slate-300 text-white font-bold text-sm px-5 py-2 rounded-full transition-colors"
+                  >
+                    {comprando === "consultas_pack_30" ? "Procesando..." : "Comprar"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Plan Ilimitado */}
+              <div className="border-2 border-[#3C5ACB]/20 bg-[#3C5ACB]/5 rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-[#3C5ACB]">Plan Ilimitado</p>
+                  <p className="text-sm text-slate-500">Consultas ilimitadas por 30 días</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-extrabold text-slate-900">$5<span className="text-sm font-normal text-slate-400">/mes</span></p>
+                  <button
+                    onClick={() => comprar("plan_ilimitado_mensual")}
+                    disabled={comprando !== null}
+                    className="mt-2 bg-[#DDDD4A] hover:bg-[#C8C830] disabled:bg-slate-300 text-[#1E2E7A] font-bold text-sm px-5 py-2 rounded-full transition-colors"
+                  >
+                    {comprando === "plan_ilimitado_mensual" ? "Procesando..." : "Activar"}
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Actualizar plan */}
-            <div className="border-2 border-[#3C5ACB]/20 bg-[#3C5ACB]/5 rounded-2xl p-5 flex items-center justify-between">
-              <div>
-                <p className="font-bold text-[#3C5ACB]">Plan BASIC</p>
-                <p className="text-sm text-slate-500">100 consultas/mes — sin interrupciones</p>
-              </div>
-              <div className="text-right">
-                <p className="text-lg font-extrabold text-slate-900">$5 USD<span className="text-sm font-normal text-slate-400">/mes</span></p>
-                <button
-                  disabled
-                  className="mt-2 bg-[#3C5ACB]/20 text-[#3C5ACB] font-bold text-sm px-5 py-2 rounded-full cursor-not-allowed"
-                  title="Próximamente"
-                >
-                  Próximamente
-                </button>
-              </div>
-            </div>
+            <p className="text-xs text-slate-400 mt-4 text-center">
+              Pagos procesados por Mibanco (R4 Conecta). Conciliación automática en segundos.
+            </p>
           </div>
-
-          <p className="text-xs text-slate-400 mt-4 text-center">
-            Procesador de pagos venezolano en camino. Te notificaremos cuando esté disponible.
-          </p>
-        </div>
+        )}
 
         {/* CTA volver */}
         <div className="text-center">
