@@ -173,7 +173,18 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                     GREATEST(
                         similarity(LOWER(pm.nombre_estandar), :termino),
                         similarity(LOWER(COALESCE(pm.terminos_busqueda, '')), :termino)
-                    ) as sim
+                    ) as sim,
+                    -- score_primario: 2 si el término es el SUSTANTIVO PRINCIPAL
+                    -- (aparece al inicio del nombre → producto primario, ej.
+                    -- "Tomate Perita"). 1 si aparece en las primeras palabras.
+                    -- 0 si aparece más adelante (probablemente derivado, ej.
+                    -- "Salsa de Tomate" → "tomate" no está al inicio).
+                    CASE
+                        WHEN LOWER(pm.nombre_estandar) ~ ('^' || :first_word || '\\M') THEN 2
+                        WHEN LOWER(pm.nombre_estandar) ~ ('^[a-záéíóúñ]+\\s+' || :first_word || '\\M') THEN 2
+                        WHEN LOWER(pm.nombre_estandar) ~ ('^([a-záéíóúñ]+\\s+){0,2}' || :first_word || '\\M') THEN 1
+                        ELSE 0
+                    END as score_primario
                 FROM productos_maestros pm
                 WHERE LOWER(pm.nombre_estandar) ~ :rx
                    OR LOWER(COALESCE(pm.terminos_busqueda, '')) ~ :rx
@@ -195,21 +206,24 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                     WHEN pr.moneda_origen = 'USD' THEN ROUND(pr.precio_bruto * (SELECT valor_usd FROM tasa), 2)
                 END as precio_ves,
                 cc.nombre_cadena,
-                c.sim
+                c.sim,
+                c.score_primario
             FROM candidatos c
             JOIN precios_recientes pr ON pr.id_producto_maestro = c.id_producto_maestro
             JOIN cadenas_comerciales cc ON cc.id_cadena = pr.id_cadena
-            ORDER BY c.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
+            ORDER BY c.score_primario DESC, c.sim DESC NULLS LAST, precio_usd ASC NULLS LAST
             LIMIT 50
         """)
 
         # Regex POSIX: "(cebolla|blanca)" — debe contener al menos una palabra
         # Usa word boundaries para no matchear dentro de otras palabras.
         regex = "(" + "|".join(palabras) + ")"
+        first_word = palabras[0] if palabras else termino_norm
 
         result = await db.execute(query, {
             "termino": termino_norm,
             "rx": regex,
+            "first_word": first_word,
             "emb_ids": list(embedding_ids),
         })
         rows = result.mappings().all()
@@ -217,6 +231,7 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
         for row in rows:
             pid = str(row["id_producto_maestro"])
             sim = float(row["sim"] or 0)
+            score_primario = int(row["score_primario"] or 0)
             # Si el producto vino por embedding, dar boost a su sim para que
             # rankee bien aunque la similitud trigram sea baja
             if pid in embedding_ids and sim < 0.3:
@@ -228,12 +243,15 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
                     "marca": row["marca"] or "",
                     "presentacion": row["presentacion"] or "",
                     "ofertas": [],
-                    "_sim": sim
+                    "_sim": sim,
+                    "_score_primario": score_primario,
                 }
             else:
                 # Actualiza sim si encontramos mayor similitud con otro término
                 if sim > todos[pid]["_sim"]:
                     todos[pid]["_sim"] = sim
+                if score_primario > todos[pid].get("_score_primario", 0):
+                    todos[pid]["_score_primario"] = score_primario
 
             # Evitar duplicar la misma tienda para el mismo producto
             tiendas_existentes = {o["tienda"] for o in todos[pid]["ofertas"]}
@@ -296,22 +314,24 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             return 1  # media
         return 2  # baja
 
-    # Ordenar por (relevancia, precio). NO usamos round-robin por tienda
-    # porque desplazaba los productos más baratos fuera del top 10
-    # (si una tienda tenía los 8 más baratos, el round-robin solo tomaba
-    # 1-2 y metía productos caros de otras tiendas).
-    # Para búsqueda de UN producto, lo que importa es: relevante + barato.
+    # Ordenar por (producto_primario, relevancia, precio).
+    # score_primario PRIMERO: "Tomate Perita" (primario, score 2) rankea
+    # antes que "Salsa de Tomate" (derivado, score 0), aunque la salsa
+    # sea más barata. Así "tomate" trae el tomate fresco primero.
+    def _score_prim(p):
+        return p.get("_score_primario", 0)
+
     candidatos = sorted(
         todos.values(),
-        key=lambda x: (_bucket_sim(x), _precio_min(x)),
+        key=lambda x: (-_score_prim(x), _bucket_sim(x), _precio_min(x)),
     )
 
-    # Top 15 candidatos más relevantes+baratos
+    # Top 15 candidatos
     resultado = candidatos[:15]
 
-    # Re-ordenar el resultado FINAL por precio para que el bot vea primero el
-    # más barato y lo destaque correctamente.
-    resultado.sort(key=_precio_min)
+    # Re-ordenar el resultado FINAL: primero por score_primario (productos
+    # primarios arriba), luego por precio dentro de cada grupo.
+    resultado.sort(key=lambda x: (-_score_prim(x), _precio_min(x)))
 
     # Filtro de outliers: si hay varios productos relevantes, descarta los que
     # tengan precio < 30% del mediano. Evita placeholders raros de Farmatodo
@@ -332,6 +352,7 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
 
     for p in resultado:
         p.pop("_sim", None)
+        p.pop("_score_primario", None)
 
     return resultado
 
