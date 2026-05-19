@@ -296,29 +296,18 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             return 1  # media
         return 2  # baja
 
+    # Ordenar por (relevancia, precio). NO usamos round-robin por tienda
+    # porque desplazaba los productos más baratos fuera del top 10
+    # (si una tienda tenía los 8 más baratos, el round-robin solo tomaba
+    # 1-2 y metía productos caros de otras tiendas).
+    # Para búsqueda de UN producto, lo que importa es: relevante + barato.
     candidatos = sorted(
         todos.values(),
         key=lambda x: (_bucket_sim(x), _precio_min(x)),
     )
 
-    # Round-robin por tienda principal — diversifica cadenas en los primeros
-    # resultados, sin sacrificar el orden por precio dentro de cada tienda.
-    por_tienda: dict[str, list[dict]] = {}
-    for p in candidatos:
-        if not p["ofertas"]:
-            continue
-        principal = p["ofertas"][0]["tienda"]
-        por_tienda.setdefault(principal, []).append(p)
-
-    resultado = []
-    while por_tienda and len(resultado) < 10:
-        for tienda in list(por_tienda.keys()):
-            if not por_tienda[tienda]:
-                del por_tienda[tienda]
-                continue
-            resultado.append(por_tienda[tienda].pop(0))
-            if len(resultado) >= 10:
-                break
+    # Top 15 candidatos más relevantes+baratos
+    resultado = candidatos[:15]
 
     # Re-ordenar el resultado FINAL por precio para que el bot vea primero el
     # más barato y lo destaque correctamente.
@@ -870,10 +859,20 @@ Productos candidatos (ya filtrados por substring):
 
 Tarea: indica los números de los productos que son razonablemente lo que el usuario busca.
 
-REGLAS DE EXCLUSIÓN — IMPORTANTE:
+REGLA #1 — CATEGORÍA SIN RELACIÓN (la más importante):
+DESCARTA SIEMPRE productos que NO tienen NINGUNA relación con lo buscado,
+aunque hayan llegado por similitud semántica. Ejemplos críticos:
+- "tomate" → "Frescolita" (refresco), "Malta", "Pepsi", "Jugo de uva" → EXCLUIR. Un refresco NO es tomate.
+- "tomate" → "Té de Tomate", "Aceite de Tomate" → EXCLUIR.
+- "cebolla" → "Vela", "Desodorante" → EXCLUIR.
+- "leche" → "Jabón con leche", "Shampoo de leche" → EXCLUIR.
+- "pan" → "Migajas de pan / Pan rallado" si pidió pan de mesa → EXCLUIR.
+Si el producto es de una CATEGORÍA TOTALMENTE DISTINTA → EXCLUIR sin dudar.
+
+REGLA #2 — DERIVADOS DEL PRODUCTO BÁSICO:
 Si el usuario pidió un PRODUCTO BÁSICO sin más contexto, descarta los derivados procesados que NO son ese producto:
 - "arroz" (sin más contexto) → arroz blanco/integral suelto. EXCLUIR: "Harina de Arroz", "Crema de Arroz Infantil", "Arroz con Leche envasado", "Postre de Arroz".
-- "tomate" → tomate fresco o salsa. EXCLUIR: "Té de Tomate", "Aceite de Tomate".
+- "tomate" → tomate fresco. MANTENER: "Salsa de Tomate" / "Pasta de Tomate" (alternativa válida si no hay fresco). EXCLUIR: refrescos, té, aceite.
 - "leche" → leche líquida o polvo. MANTENER: "Crema de Leche" (derivado común). EXCLUIR: "Sabor a Leche".
 - "azúcar" → azúcar en bolsa. EXCLUIR: "Coca-Cola Sin Azúcar", "Galletas con Azúcar".
 - "harina" → harina de trigo o maíz. EXCLUIR si es muy específico tipo "Harina infantil de cereales 8 sabores".
@@ -903,20 +902,27 @@ Si NINGUNO es razonable: ninguno"""
     if raw_low == "todos":
         return productos
     if raw_low == "ninguno":
-        # Fail-safe: si Claude dice ninguno, mantener los primeros 5 igual.
-        # El usuario decide si son útiles. Mejor mostrar algo que nada.
-        logger.warning(
-            "filtrar_relevantes: Claude descartó todos pero retornamos top 5 como fail-safe (termino=%s)",
+        # Claude dice que NINGUNO es relevante. Confiamos en Claude:
+        # devolvemos vacío. Es mejor que el bot diga "no encontré tomate
+        # fresco" a que muestre Frescolita (un refresco) como si fuera tomate.
+        logger.info(
+            "filtrar_relevantes: Claude descartó todos para '%s' → devuelvo vacío",
             termino_principal,
         )
-        return productos[:5]
+        return []
 
     try:
         indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
         filtrados = [productos[i] for i in indices if 0 <= i < len(productos)]
-        return filtrados if filtrados else productos[:5]  # fail-safe
+        # Si Claude devolvió índices válidos, usamos SOLO esos (aunque sean pocos).
+        # Si no devolvió ninguno válido, devolvemos vacío (no top 5 sin filtrar —
+        # eso era lo que dejaba pasar Frescolita).
+        return filtrados
     except Exception:
-        return productos[:5]
+        # Error de parsing de la respuesta de Claude: devolvemos top 3 como
+        # mínimo (reducir daño), no top 5.
+        logger.warning("filtrar_relevantes: error parseando respuesta Claude, top 3 fallback")
+        return productos[:3]
 
 
 # ---------------------------------------------------------------------------
