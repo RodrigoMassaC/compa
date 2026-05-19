@@ -139,11 +139,20 @@ async def check_monthly_limit(
         remaining = max(0, effective_limit - count)
 
         if count > effective_limit:
+            if plan in ("FREE", "ANON"):
+                extra = (
+                    "Para seguir comparando precios, consigue más consultas aquí 👇\n"
+                    "https://compa-ra.com/consultas\n\n"
+                    "• Pack +30 consultas: $1.50\n"
+                    "• Plan Ilimitado (1 mes): $5\n\n"
+                    "Pago Móvil desde cualquier banco, se activa al instante."
+                )
+            else:
+                extra = "Contacta soporte para ampliar tu plan."
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"Alcanzaste el límite de {effective_limit} consultas este mes. "
-                    f"{'Puedes comprar más consultas en compa-ra.com/consultas.' if plan in ('FREE','ANON') else 'Contacta soporte.'}"
+                    f"Alcanzaste el límite de {effective_limit} consultas este mes. {extra}"
                 ),
                 headers={
                     "X-RateLimit-Limit": str(effective_limit),

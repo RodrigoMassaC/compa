@@ -552,9 +552,13 @@ async def handle_incoming_message(phone: str, mensaje: str) -> None:
                 hoy = date.today()
                 dias_restantes = monthrange(hoy.year, hoy.month)[1] - hoy.day
                 await send_text_message(phone, (
-                    f"⚠️ Alcanzaste el límite de consultas de este mes.\n\n"
-                    f"El contador se reinicia en {dias_restantes} días.\n"
-                    f"Para consultas ilimitadas, mejora tu plan en *compa-ra.com* 🚀"
+                    f"⚠️ Alcanzaste el límite de consultas gratis de este mes.\n\n"
+                    f"Para seguir comparando precios sin esperar, consigue más aquí 👇\n"
+                    f"https://compa-ra.com/consultas\n\n"
+                    f"💰 *Pack +30 consultas* — $1.50\n"
+                    f"♾️ *Plan Ilimitado (1 mes)* — $5\n\n"
+                    f"Pagas con Pago Móvil desde cualquier banco y se activa al instante. "
+                    f"O espera {dias_restantes} días para que se reinicie el contador gratis."
                 ))
                 return
 
