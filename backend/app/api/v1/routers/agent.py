@@ -44,6 +44,7 @@ class ChatResponse(BaseModel):
 # crema dental dentífrico higiene bucal" en vez de solo "pasta dental"
 # que se puede confundir con pasta de comer).
 SINONIMOS_VE = {
+    # ── Bodega / abarrotes ──────────────────────────────────────────────
     "pasta dental": "crema dental dentífrico higiene bucal",
     "pasta de dientes": "crema dental dentífrico higiene bucal",
     "papel toilette": "papel higiénico",
@@ -54,6 +55,23 @@ SINONIMOS_VE = {
     "kotex": "toallas sanitarias toallas higiénicas femeninas",
     "cocacola": "coca-cola refresco cola",
     "papas fritas": "papas fritas snacks de papa chips",
+    # ── Farmacia: analgésicos / antifebriles ────────────────────────────
+    "ibuprofeno":   "ibuprofeno advil motrin ibuflam dolofen analgésico antiinflamatorio",
+    "advil":        "advil ibuprofeno analgésico",
+    "motrin":       "motrin ibuprofeno analgésico",
+    "acetaminofen": "acetaminofén paracetamol atamel panadol tylenol calmidol analgésico",
+    "acetaminofén": "acetaminofén paracetamol atamel panadol tylenol calmidol analgésico",
+    "atamel":       "atamel acetaminofén paracetamol analgésico",
+    "panadol":      "panadol acetaminofén paracetamol analgésico",
+    "tylenol":      "tylenol acetaminofén paracetamol analgésico",
+    "paracetamol":  "paracetamol acetaminofén atamel panadol analgésico",
+    "aspirina":     "aspirina ácido acetilsalicílico analgésico antiinflamatorio",
+    "diclofenac":   "diclofenac diclofenaco voltaren antiinflamatorio",
+    # ── Farmacia: gastro / alergia / vitaminas ──────────────────────────
+    "omeprazol":    "omeprazol prazol antiácido reflujo gastritis",
+    "loratadina":   "loratadina clarityne alercet antihistamínico alergia",
+    "cetirizina":   "cetirizina zyrtec antihistamínico alergia",
+    "vitamina c":   "vitamina c ácido ascórbico redoxon cebión suplemento",
 }
 
 
@@ -350,9 +368,11 @@ async def buscar_en_db(terminos: list[str], db: AsyncSession) -> list[dict]:
             except statistics.StatisticsError:
                 pass
 
+    # Limpiamos _sim ahora; _score_primario se mantiene para que
+    # filtrar_relevantes pueda usarlo como señal de confianza
+    # (productos primarios → no descartar todo aunque Haiku diga "ninguno").
     for p in resultado:
         p.pop("_sim", None)
-        p.pop("_score_primario", None)
 
     return resultado
 
@@ -920,29 +940,64 @@ Si NINGUNO es razonable: ninguno"""
     logger.debug("filtrar_relevantes | termino=%s | raw=%s", termino_principal, raw)
 
     raw_low = raw.lower()
+
+    # Productos PRIMARIOS: los que matchean literalmente el término al inicio
+    # del nombre (score_primario>=2). Son señal fuerte de relevancia y se usan
+    # como red de seguridad cuando Haiku falla.
+    primarios = [p for p in productos if p.get("_score_primario", 0) >= 2]
+
     if raw_low == "todos":
         return productos
+
     if raw_low == "ninguno":
-        # Claude dice que NINGUNO es relevante. Confiamos en Claude:
-        # devolvemos vacío. Es mejor que el bot diga "no encontré tomate
-        # fresco" a que muestre Frescolita (un refresco) como si fuera tomate.
+        # Si Haiku dice "ninguno" pero la búsqueda SQL trajo productos cuyo
+        # nombre EMPIEZA con el término (ej. "Ibuprofeno 200mg" para "ibuprofeno",
+        # "Atamel 500mg" para "atamel"), confiamos en la DB sobre Haiku:
+        # esos son casi siempre lo que pidió el usuario.
+        # Esto NO reabre el bug de Frescolita: "Frescolita" tiene score_primario=0
+        # para "tomate" (no empieza con tomate), así que sigue siendo descartada.
+        if primarios:
+            logger.info(
+                "filtrar_relevantes: Haiku dijo 'ninguno' pero hay %d primarios "
+                "para '%s' → confío en la DB y devuelvo los primarios",
+                len(primarios), termino_principal,
+            )
+            return primarios[:8]
         logger.info(
-            "filtrar_relevantes: Claude descartó todos para '%s' → devuelvo vacío",
-            termino_principal,
+            "filtrar_relevantes: Haiku descartó todos para '%s' (sin primarios) "
+            "→ devuelvo vacío (%d candidatos descartados)",
+            termino_principal, len(productos),
         )
         return []
 
     try:
         indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
         filtrados = [productos[i] for i in indices if 0 <= i < len(productos)]
-        # Si Claude devolvió índices válidos, usamos SOLO esos (aunque sean pocos).
-        # Si no devolvió ninguno válido, devolvemos vacío (no top 5 sin filtrar —
-        # eso era lo que dejaba pasar Frescolita).
+        # Diagnóstico: si Haiku dejó la lista vacía con índices inválidos pero
+        # SQL trajo primarios, los recuperamos.
+        if not filtrados and primarios:
+            logger.info(
+                "filtrar_relevantes: Haiku devolvió '%s' sin índices válidos "
+                "para '%s' pero hay %d primarios → uso los primarios",
+                raw[:80], termino_principal, len(primarios),
+            )
+            return primarios[:8]
+        if not filtrados:
+            logger.info(
+                "filtrar_relevantes: Haiku devolvió '%s' → 0 productos finales "
+                "para '%s' (entrada: %d candidatos)",
+                raw[:80], termino_principal, len(productos),
+            )
         return filtrados
     except Exception:
-        # Error de parsing de la respuesta de Claude: devolvemos top 3 como
-        # mínimo (reducir daño), no top 5.
-        logger.warning("filtrar_relevantes: error parseando respuesta Claude, top 3 fallback")
+        # Error de parsing de la respuesta de Haiku: si hay primarios, los
+        # devolvemos como red de seguridad; si no, top 3 (mínimo daño).
+        logger.warning(
+            "filtrar_relevantes: error parseando respuesta Haiku '%s' para '%s'",
+            raw[:80], termino_principal,
+        )
+        if primarios:
+            return primarios[:8]
         return productos[:3]
 
 
@@ -1328,6 +1383,11 @@ async def chat(
         productos_encontrados = await filtrar_relevantes(
             productos_encontrados, terminos, request.mensaje, client
         )
+
+        # Limpiar campos internos antes de pasar el JSON al LLM
+        for p in productos_encontrados:
+            p.pop("_score_primario", None)
+            p.pop("_sim", None)
 
         resultados_str = (
             json.dumps(productos_encontrados, ensure_ascii=False, indent=2)

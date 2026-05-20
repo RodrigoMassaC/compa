@@ -95,6 +95,13 @@ class GamaIndexSpider(BaseSpider):
 
     REDIS_KEY = "gama:product_queue"
 
+    # Tope de seguridad por categoría (evita bucles infinitos si la web cambia)
+    MAX_PAGES: int = 120
+    # Reintentos internos ante render incompleto / errores transitorios
+    MAX_RETRIES: int = 3
+    # Páginas con error consecutivas antes de abandonar la categoría
+    MAX_CONSEC_ERRORS: int = 3
+
     def __init__(self):
         super().__init__()
 
@@ -135,8 +142,10 @@ class GamaIndexSpider(BaseSpider):
         self.logger.info(f"Procesando categoría: {slug} ({codigo or 'sin código'})")
         page_num = 0  # SAP Hybris usa base-0
         total_nuevos = 0
+        seen_skus: set[str] = set()
+        consec_errors = 0
 
-        while True:
+        while page_num < self.MAX_PAGES:
             if codigo:
                 base = f"{BASE_URL}/es/{slug}/c/{codigo}"
             else:
@@ -144,74 +153,146 @@ class GamaIndexSpider(BaseSpider):
 
             url = base if page_num == 0 else f"{base}?currentPage={page_num}"
 
-            nuevos, hay_mas = await self._process_page(context, redis_client, url, page_num)
+            nuevos, encontrados, error = await self._process_page(
+                context, redis_client, url, page_num, seen_skus
+            )
             total_nuevos += nuevos
 
-            if not hay_mas:
-                self.logger.info(f"  [{slug}] Fin en página {page_num + 1}. Total nuevos: {total_nuevos}")
+            if error:
+                consec_errors += 1
+                if consec_errors >= self.MAX_CONSEC_ERRORS:
+                    self.logger.error(
+                        f"  [{slug}] {consec_errors} páginas con error seguidas. "
+                        f"Abandono categoría. Total nuevos: {total_nuevos}"
+                    )
+                    break
+                self.logger.warning(
+                    f"  [{slug}] Error en página {page_num + 1}, salto a la siguiente "
+                    f"({consec_errors}/{self.MAX_CONSEC_ERRORS})."
+                )
+                page_num += 1
+                await asyncio.sleep(1.0)
+                continue
+
+            consec_errors = 0
+
+            # Fin natural: la página no tiene productos (SAP Hybris renderiza vacío)
+            if encontrados == 0:
+                self.logger.info(
+                    f"  [{slug}] Página {page_num + 1} sin productos, fin de categoría. "
+                    f"Total nuevos: {total_nuevos}"
+                )
+                break
+
+            # Overflow: la página solo repite SKUs ya vistos (clamp a primera/última)
+            if nuevos == 0:
+                self.logger.info(
+                    f"  [{slug}] Página {page_num + 1} solo duplicados, fin de categoría. "
+                    f"Total nuevos: {total_nuevos}"
+                )
                 break
 
             page_num += 1
             await asyncio.sleep(0.5)
 
-    async def _process_page(self, context, redis_client: aioredis.Redis, url: str, page_num: int):
+    async def _process_page(
+        self,
+        context,
+        redis_client: aioredis.Redis,
+        url: str,
+        page_num: int,
+        seen_skus: set,
+    ):
         """
-        Procesa una página de categoría.
-        Retorna (nuevos_agregados: int, hay_mas_paginas: bool)
+        Procesa una página de categoría con reintentos ante render incompleto
+        del SPA o errores transitorios.
+
+        Retorna (nuevos: int, encontrados: int, error: bool)
+          - nuevos      : SKUs no vistos antes en esta categoría
+          - encontrados : nº de productos en la página (0 = fin natural)
+          - error       : True si fallaron todos los reintentos
         """
-        page = await context.new_page()
-        nuevos = 0
-        hay_mas = False
+        for intento in range(1, self.MAX_RETRIES + 1):
+            page = await context.new_page()
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(4000)
 
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await page.wait_for_timeout(4000)
+                product_links = self._extract_product_links(await page.content())
 
-            content = await page.content()
-            soup = BeautifulSoup(content, "lxml")
+                # 0 productos puede ser fin real o lag de Angular: esperar y reintentar
+                # un par de veces antes de concluir que la categoría terminó.
+                espera_extra = 0
+                while not product_links and espera_extra < 2:
+                    await page.wait_for_timeout(3500)
+                    product_links = self._extract_product_links(await page.content())
+                    espera_extra += 1
 
-            # Productos: links con href que termina en /p/{SKU}
-            product_links = soup.select('a.cx-product-name[href*="/p/"]')
+                await page.close()
 
-            # Fallback: cualquier link /p/
-            if not product_links:
-                product_links = soup.select('a[href*="/p/"]')
-                # Deduplicar por href
-                seen = set()
-                unique_links = []
-                for l in product_links:
-                    href = l.get("href", "")
-                    if href not in seen and "/p/" in href:
-                        seen.add(href)
-                        unique_links.append(l)
-                product_links = unique_links
+                if not product_links:
+                    return 0, 0, False  # fin natural confirmado
 
-            if not product_links:
-                return 0, False
+                nuevos = 0
+                for link in product_links:
+                    href = link.get("href", "")
+                    full_url = f"{BASE_URL}{href}" if href.startswith("/") else href
+                    sku = (
+                        href.split("/p/")[-1].strip("/")
+                        if "/p/" in href
+                        else href.split("/")[-1]
+                    )
 
-            self.logger.info(f"  Página {page_num + 1}: {len(product_links)} productos")
+                    payload = json.dumps({"sku": sku, "url": full_url})
+                    await redis_client.sadd(self.REDIS_KEY, payload)
 
-            for link in product_links:
-                href = link.get("href", "")
-                full_url = f"{BASE_URL}{href}" if href.startswith("/") else href
+                    if sku not in seen_skus:
+                        seen_skus.add(sku)
+                        nuevos += 1
 
-                # SKU: último segmento después de /p/
-                sku = href.split("/p/")[-1].strip("/") if "/p/" in href else href.split("/")[-1]
+                self.logger.info(
+                    f"  Página {page_num + 1}: {len(product_links)} productos, "
+                    f"{nuevos} nuevos"
+                )
+                return nuevos, len(product_links), False
 
-                payload = json.dumps({"sku": sku, "url": full_url})
-                was_added = await redis_client.sadd(self.REDIS_KEY, payload)
-                if was_added:
-                    nuevos += 1
+            except Exception as e:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                if intento >= self.MAX_RETRIES:
+                    self.logger.error(
+                        f"Error persistente en {url} tras {intento} intentos: {e}"
+                    )
+                    return 0, 0, True
+                espera = 3.0 * intento
+                self.logger.warning(
+                    f"Error transitorio en {url} (intento {intento}/{self.MAX_RETRIES}): "
+                    f"{e}. Reintento en {espera:.0f}s."
+                )
+                await asyncio.sleep(espera)
 
-            # Hay más páginas si encontramos 12 productos (tamaño de página confirmado)
-            hay_mas = len(product_links) >= 12
+        return 0, 0, True
 
-        except Exception as e:
-            self.logger.error(f"Error en {url}: {e}")
-        finally:
-            await page.close()
+    @staticmethod
+    def _extract_product_links(content: str) -> list:
+        """Extrae links de producto (/p/{SKU}) del HTML renderizado."""
+        soup = BeautifulSoup(content, "lxml")
 
-        return nuevos, hay_mas
+        product_links = soup.select('a.cx-product-name[href*="/p/"]')
+        if product_links:
+            return product_links
+
+        # Fallback: cualquier link /p/ deduplicado por href
+        seen: set = set()
+        unique_links: list = []
+        for l in soup.select('a[href*="/p/"]'):
+            href = l.get("href", "")
+            if "/p/" in href and href not in seen:
+                seen.add(href)
+                unique_links.append(l)
+        return unique_links
 
 
 class GamaDetailSpider(BaseSpider):

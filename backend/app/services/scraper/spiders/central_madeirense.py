@@ -39,6 +39,11 @@ class CentralMadeirenSeSpider(BaseSpider):
     DELAY_MIN: float = 1.5
     DELAY_MAX: float = 2.5
 
+    # Tope de seguridad por categoría (evita bucles infinitos si la web cambia).
+    MAX_PAGES: int = 80
+    # Reintentos ante errores transitorios (timeout, 5xx, conexión).
+    MAX_RETRIES: int = 4
+
     async def run(self) -> List[ScrapedProduct]:
         self.logger.info("Iniciando CentralMadeirenSeSpider")
         scraped_products: List[ScrapedProduct] = []
@@ -47,38 +52,77 @@ class CentralMadeirenSeSpider(BaseSpider):
             for categoria in CATEGORIAS:
                 self.logger.info(f"📂 Categoría: {categoria}")
                 page_num = 1
+                seen_skus: set[str] = set()
 
-                while True:
+                while page_num <= self.MAX_PAGES:
                     url = f"{SHOP_BASE_URL}/{categoria}/page/{page_num}/"
-                    self.logger.info(f"Página: {url}")
 
-                    try:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        soup = BeautifulSoup(resp.text, "lxml")
-                        blocks = soup.select("li.product")
-
-                        if not blocks:
-                            self.logger.info(f"Sin productos en {categoria} p{page_num}, fin de categoría.")
+                    resp = None
+                    end_of_category = False
+                    for intento in range(1, self.MAX_RETRIES + 1):
+                        try:
+                            resp = await client.get(url)
+                            # 404 = no existe esa página → fin natural de la categoría
+                            if resp.status_code == 404:
+                                end_of_category = True
+                                break
+                            resp.raise_for_status()
                             break
+                        except Exception as e:
+                            if intento >= self.MAX_RETRIES:
+                                self.logger.error(
+                                    f"Error persistente en {url} tras {intento} intentos: {e}. "
+                                    f"Continuo con siguiente categoría."
+                                )
+                                resp = None
+                                break
+                            espera = 2.0 * intento
+                            self.logger.warning(
+                                f"Error transitorio en {url} (intento {intento}/{self.MAX_RETRIES}): {e}. "
+                                f"Reintento en {espera:.0f}s."
+                            )
+                            await asyncio.sleep(espera)
 
-                        for block in blocks:
-                            product = self._parse_block(block)
-                            if product:
-                                scraped_products.append(product)
-                                await self._save_to_db(product)
-
-                        self.logger.info(f"{categoria} p{page_num}: {len(blocks)} productos. Total: {len(scraped_products)}")
-
-                        if len(blocks) < PRODUCTS_PER_PAGE:
-                            break
-
-                        page_num += 1
-                        await asyncio.sleep(random.uniform(self.DELAY_MIN, self.DELAY_MAX))
-
-                    except Exception as e:
-                        self.logger.error(f"Error en {url}: {e}")
+                    if end_of_category:
+                        self.logger.info(f"{categoria}: HTTP 404 en p{page_num}, fin de categoría.")
                         break
+                    if resp is None:
+                        # Falló tras todos los reintentos → abandonar esta categoría
+                        break
+
+                    soup = BeautifulSoup(resp.text, "lxml")
+                    blocks = soup.select("li.product")
+
+                    if not blocks:
+                        self.logger.info(f"Sin productos en {categoria} p{page_num}, fin de categoría.")
+                        break
+
+                    nuevos = 0
+                    for block in blocks:
+                        product = self._parse_block(block)
+                        if not product:
+                            continue
+                        # Anti-duplicado: si una página repite SKUs ya vistos
+                        # (overflow que redirige a página 1) se corta el bucle.
+                        if product.sku_comercio in seen_skus:
+                            continue
+                        seen_skus.add(product.sku_comercio)
+                        nuevos += 1
+                        scraped_products.append(product)
+                        await self._save_to_db(product)
+
+                    self.logger.info(
+                        f"{categoria} p{page_num}: {len(blocks)} bloques, {nuevos} nuevos. "
+                        f"Total: {len(scraped_products)}"
+                    )
+
+                    # Si la página entera eran duplicados → llegamos al final real
+                    if nuevos == 0:
+                        self.logger.info(f"{categoria} p{page_num}: solo duplicados, fin de categoría.")
+                        break
+
+                    page_num += 1
+                    await asyncio.sleep(random.uniform(self.DELAY_MIN, self.DELAY_MAX))
 
         self.logger.info(f"Finalizado. Total: {len(scraped_products)}")
         return scraped_products
