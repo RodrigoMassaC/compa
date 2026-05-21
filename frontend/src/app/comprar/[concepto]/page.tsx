@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef, use } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -47,8 +47,8 @@ const BANCOS: Record<string, string> = {
   "0163": "Banco del Tesoro",
 };
 
-export default function ComprarPage({ params }: { params: Promise<{ concepto: string }> }) {
-  const { concepto } = use(params);
+export default function ComprarPage({ params }: { params: { concepto: string } }) {
+  const { concepto } = params;
   const router = useRouter();
   const [datos, setDatos] = useState<PagoDatos | null>(null);
   const [estado, setEstado] = useState<PagoEstado | null>(null);
