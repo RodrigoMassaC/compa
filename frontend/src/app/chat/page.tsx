@@ -567,9 +567,9 @@ export default function ChatPage() {
                   {currentUser ? planLabel(currentUser.plan) : "Sin cuenta"}
                 </div>
                 {currentUser ? (
-                  <a href="#pro" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5">
+                  <Link href="/consultas" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5 hover:underline">
                     Mejorar a Pro ✨
-                  </a>
+                  </Link>
                 ) : (
                   <Link href="/auth" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5">
                     Iniciar sesión →

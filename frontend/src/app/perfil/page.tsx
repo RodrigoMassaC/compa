@@ -173,11 +173,28 @@ export default function PerfilPage() {
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-extrabold text-slate-800 truncate">{user.nombre_completo}</h1>
             <p className="text-sm text-slate-500">{user.email}</p>
-            <span className={`inline-block mt-1 text-xs font-bold px-3 py-0.5 rounded-full ${planColor[user.plan] ?? "bg-slate-100 text-slate-600"}`}>
-              {planLabel(user.plan)}
-            </span>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <span className={`inline-block text-xs font-bold px-3 py-0.5 rounded-full ${planColor[user.plan] ?? "bg-slate-100 text-slate-600"}`}>
+                {planLabel(user.plan)}
+              </span>
+              <Link href="/consultas" className="text-xs font-bold text-[#3C5ACB] hover:underline">
+                Mejorar plan ✨
+              </Link>
+            </div>
           </div>
         </div>
+
+        {/* Acceso directo a planes / consultas */}
+        <Link
+          href="/consultas"
+          className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center justify-between hover:border-[#3C5ACB]/40 transition-colors"
+        >
+          <div>
+            <p className="font-bold text-slate-800 text-sm">Mis consultas y planes</p>
+            <p className="text-xs text-slate-400">Compra packs o activa el Plan Ilimitado con Pago Móvil</p>
+          </div>
+          <span className="text-[#3C5ACB] font-bold text-lg">→</span>
+        </Link>
 
         {/* Información personal */}
         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
