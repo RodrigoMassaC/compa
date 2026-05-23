@@ -478,11 +478,11 @@ export default function ChatPage() {
             </p>
             <div className="flex flex-col gap-3">
               <Link
-                href="/consultas"
+                href="/planes"
                 className="bg-[#3C5ACB] hover:bg-[#2F47A8] text-white font-bold py-3 px-6 rounded-full transition-colors"
                 onClick={() => setShowLimitModal(false)}
               >
-                Ver opciones de consultas
+                Ver planes y comprar consultas
               </Link>
               <button
                 onClick={() => setShowLimitModal(false)}
@@ -567,7 +567,7 @@ export default function ChatPage() {
                   {currentUser ? planLabel(currentUser.plan) : "Sin cuenta"}
                 </div>
                 {currentUser ? (
-                  <Link href="/consultas" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5 hover:underline">
+                  <Link href="/planes" className="text-xs font-bold text-[#3C5ACB] inline-block mt-0.5 hover:underline">
                     Mejorar a Pro ✨
                   </Link>
                 ) : (

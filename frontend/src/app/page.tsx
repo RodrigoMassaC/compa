@@ -13,6 +13,7 @@ export default function LandingPage() {
           </Link>
           <nav className="hidden md:flex items-center gap-10 text-sm font-semibold text-slate-600">
             <Link href="#compradores" className="hover:text-[#3C5ACB] transition-colors">Para Compradores</Link>
+            <Link href="/planes" className="hover:text-[#3C5ACB] transition-colors">Planes</Link>
             <Link href="#empresas" className="hover:text-[#3C5ACB] transition-colors">Para Empresas</Link>
             <Link href="#precios" className="hover:text-[#3C5ACB] transition-colors">Precios B2B</Link>
           </nav>

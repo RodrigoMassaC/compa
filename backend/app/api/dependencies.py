@@ -142,7 +142,7 @@ async def check_monthly_limit(
             if plan in ("FREE", "ANON"):
                 extra = (
                     "Para seguir comparando precios, consigue más consultas aquí 👇\n"
-                    "https://compa-ra.com/consultas\n\n"
+                    "https://compa-ra.com/planes\n\n"
                     "• Pack +30 consultas: $1.50\n"
                     "• Plan Ilimitado (1 mes): $5\n\n"
                     "Pago Móvil desde cualquier banco, se activa al instante."

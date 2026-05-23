@@ -177,24 +177,36 @@ export default function PerfilPage() {
               <span className={`inline-block text-xs font-bold px-3 py-0.5 rounded-full ${planColor[user.plan] ?? "bg-slate-100 text-slate-600"}`}>
                 {planLabel(user.plan)}
               </span>
-              <Link href="/consultas" className="text-xs font-bold text-[#3C5ACB] hover:underline">
+              <Link href="/planes" className="text-xs font-bold text-[#3C5ACB] hover:underline">
                 Mejorar plan ✨
               </Link>
             </div>
           </div>
         </div>
 
-        {/* Acceso directo a planes / consultas */}
-        <Link
-          href="/consultas"
-          className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center justify-between hover:border-[#3C5ACB]/40 transition-colors"
-        >
-          <div>
-            <p className="font-bold text-slate-800 text-sm">Mis consultas y planes</p>
-            <p className="text-xs text-slate-400">Compra packs o activa el Plan Ilimitado con Pago Móvil</p>
-          </div>
-          <span className="text-[#3C5ACB] font-bold text-lg">→</span>
-        </Link>
+        {/* Acceso directo a planes y al dashboard de consultas */}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <Link
+            href="/planes"
+            className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center justify-between hover:border-[#3C5ACB]/40 transition-colors"
+          >
+            <div>
+              <p className="font-bold text-slate-800 text-sm">Ver planes ✨</p>
+              <p className="text-xs text-slate-400">Pack +30 o Plan Ilimitado</p>
+            </div>
+            <span className="text-[#3C5ACB] font-bold text-lg">→</span>
+          </Link>
+          <Link
+            href="/consultas"
+            className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center justify-between hover:border-[#3C5ACB]/40 transition-colors"
+          >
+            <div>
+              <p className="font-bold text-slate-800 text-sm">Mis consultas</p>
+              <p className="text-xs text-slate-400">Estado de uso y compras</p>
+            </div>
+            <span className="text-[#3C5ACB] font-bold text-lg">→</span>
+          </Link>
+        </div>
 
         {/* Información personal */}
         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
