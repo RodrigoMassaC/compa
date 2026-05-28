@@ -79,8 +79,23 @@ async def get_quota(current_user: dict = Depends(get_current_user)):
 
     redis = await _get_redis()
     try:
-        uso    = int(await redis.get(f"{QUOTA_PREFIX}:{uid}:{mes}") or 0)
-        bonus  = int(await redis.get(f"{QUOTA_PREFIX}:bonus:{uid}:{mes}") or 0)
+        uso       = int(await redis.get(f"{QUOTA_PREFIX}:{uid}:{mes}") or 0)
+        bonus     = int(await redis.get(f"{QUOTA_PREFIX}:bonus:{uid}:{mes}") or 0)
+        unlimited = await redis.get(f"{QUOTA_PREFIX}:unlimited:{uid}")
+
+        if unlimited:
+            return {
+                "plan":           "ILIMITADO",
+                "mes":            mes,
+                "uso":            uso,
+                "bonus_comprado": bonus,
+                "limite":         None,
+                "restantes":      None,
+                "porcentaje":     0,
+                "ilimitado":      True,
+                "ilimitado_hasta": unlimited,
+            }
+
         limite = base_limit + bonus
         return {
             "plan":           plan,
@@ -90,6 +105,7 @@ async def get_quota(current_user: dict = Depends(get_current_user)):
             "limite":         limite,
             "restantes":      max(0, limite - uso),
             "porcentaje":     round(min(100, uso / limite * 100)) if limite else 0,
+            "ilimitado":      False,
         }
     finally:
         await redis.aclose()
@@ -117,6 +133,51 @@ async def add_quota(
     logger.info("add_quota | user=%s cantidad=%d bonus_total=%d",
                 target_id, body.cantidad, resultado["bonus_comprado"])
     return resultado
+
+
+# ── GET /admin/pagos-recientes (admin) — diagnóstico ─────────────────────────
+
+@router.get("/admin/pagos-recientes")
+async def admin_pagos_recientes(
+    limite: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista los últimos pagos con su estado. Solo ADMIN.
+
+    Sirve para verificar si los webhooks de R4 están conciliando:
+      - status='pending'  → el webhook NO llegó o no concilió
+      - status='approved' → webhook OK + producto activado
+      - status='rejected' → webhook llegó pero monto/codigo_red falló
+    """
+    if current_user.get("rol_usuario") != "ADMIN":
+        raise HTTPException(status_code=403, detail="Solo ADMIN")
+
+    r = await db.execute(text("""
+        SELECT concepto, status, motivo_rechazo, tipo_producto,
+               monto_bs, monto_usd, codigo_red, banco_emisor,
+               telefono_emisor, referencia_banco,
+               creado_en, aprobado_en
+        FROM pagos_bolivares
+        ORDER BY creado_en DESC
+        LIMIT :lim
+    """), {"lim": min(limite, 100)})
+    rows = r.mappings().all()
+
+    resumen = {"pending": 0, "approved": 0, "rejected": 0, "expired": 0}
+    pagos = []
+    for row in rows:
+        d = dict(row)
+        resumen[d["status"]] = resumen.get(d["status"], 0) + 1
+        for k in ("creado_en", "aprobado_en"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        for k in ("monto_bs", "monto_usd"):
+            if d.get(k) is not None:
+                d[k] = float(d[k])
+        pagos.append(d)
+
+    return {"resumen": resumen, "total": len(pagos), "pagos": pagos}
 
 
 # ── POST /pago-movil/crear (autenticado) ─────────────────────────────────────

@@ -50,24 +50,61 @@ def get_client_ip(req: Request) -> str:
 
 
 def is_allowed_ip(req: Request) -> bool:
-    """Verifica que la IP del request esté en la whitelist de R4."""
+    """Verifica que la IP del request esté en la whitelist de R4.
+
+    Si settings.r4_enforce_ip_whitelist es False, SIEMPRE loguea la IP
+    entrante pero NO rechaza (modo verificación mientras Mibanco confirma
+    sus IPs de salida). La autenticación por token sigue siendo obligatoria.
+    """
     allowed = {ip.strip() for ip in settings.r4_allowed_ips.split(",") if ip.strip()}
     ip = get_client_ip(req)
-    if ip not in allowed:
-        logger.warning(f"IP no autorizada para webhook R4: {ip} (whitelist: {allowed})")
-        return False
-    return True
+    xff = req.headers.get("x-forwarded-for", "")
+    real = req.client.host if req.client else "?"
+
+    if ip in allowed:
+        logger.info(f"webhook R4 | IP autorizada: {ip}")
+        return True
+
+    if not settings.r4_enforce_ip_whitelist:
+        logger.warning(
+            f"webhook R4 | IP {ip} NO está en whitelist {allowed} pero "
+            f"r4_enforce_ip_whitelist=False → se PERMITE. "
+            f"(x-forwarded-for='{xff}', client.host='{real}'). "
+            f"Agrega esta IP a R4_ALLOWED_IPS y activa el enforce."
+        )
+        return True
+
+    logger.warning(
+        f"webhook R4 | IP NO autorizada: {ip} (whitelist={allowed}, "
+        f"x-forwarded-for='{xff}', client.host='{real}')"
+    )
+    return False
 
 
 def is_valid_token(req: Request) -> bool:
-    """Verifica que el header Authorization coincida con nuestro webhook token (UUID)."""
+    """Verifica que el header Authorization coincida con nuestro webhook token.
+
+    Acepta el token con o sin prefijo 'Bearer ' (R4 puede enviarlo de
+    cualquiera de las dos formas). Comparación con compare_digest.
+    """
     auth = req.headers.get("authorization", "").strip()
     expected = settings.r4_webhook_token.strip()
+
     if not expected:
-        logger.error("R4_WEBHOOK_TOKEN no configurado")
+        logger.error("R4_WEBHOOK_TOKEN no configurado — rechazo webhook")
         return False
-    if auth != expected:
-        logger.warning("Authorization inválido en webhook R4")
+
+    # Normalizar: aceptar "Bearer <uuid>" o "<uuid>" directo
+    recibido = auth
+    if recibido.lower().startswith("bearer "):
+        recibido = recibido[7:].strip()
+
+    if not hmac.compare_digest(recibido, expected):
+        logger.warning(
+            f"webhook R4 | Authorization inválido. "
+            f"recibido_len={len(recibido)} esperado_len={len(expected)} "
+            f"(header presente={bool(auth)})"
+        )
         return False
     return True
 

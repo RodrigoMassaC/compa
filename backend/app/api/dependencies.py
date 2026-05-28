@@ -125,6 +125,15 @@ async def check_monthly_limit(
         return {"count": 0, "limit": limit, "remaining": limit}  # fail-open
 
     try:
+        # Plan ilimitado activo → no aplicar límite (solo contar uso)
+        unlimited = await redis.get(f"rl:monthly:unlimited:{identifier}")
+        if unlimited:
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, 35 * 86400)
+            await redis.aclose()
+            return {"count": count, "limit": 999999, "remaining": 999999, "unlimited": True}
+
         # Añadir bonus comprado (paquetes adicionales)
         key_bonus = f"rl:monthly:bonus:{identifier}:{mes}"
         bonus = int(await redis.get(key_bonus) or 0)

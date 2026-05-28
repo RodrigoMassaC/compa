@@ -12,9 +12,11 @@ interface QuotaData {
   mes: string;
   uso: number;
   bonus_comprado: number;
-  limite: number;
-  restantes: number;
+  limite: number | null;
+  restantes: number | null;
   porcentaje: number;
+  ilimitado?: boolean;
+  ilimitado_hasta?: string;
 }
 
 export default function ConsultasPage() {
@@ -107,6 +109,19 @@ export default function ConsultasPage() {
               <Link href="/auth" className="bg-[#3C5ACB] text-white font-bold px-6 py-3 rounded-full hover:bg-[#2F47A8] transition-colors">
                 Iniciar sesión
               </Link>
+            </div>
+          ) : quota?.ilimitado ? (
+            <div className="bg-[#3C5ACB]/5 border border-[#3C5ACB]/20 rounded-2xl p-6 text-center">
+              <p className="text-3xl mb-2">♾️</p>
+              <p className="text-xl font-extrabold text-[#3C5ACB] mb-1">Plan Ilimitado activo</p>
+              <p className="text-sm text-slate-500">
+                Consultas sin límite. Llevas {quota.uso} este mes.
+              </p>
+              {quota.ilimitado_hasta && (
+                <p className="text-xs text-slate-400 mt-2">
+                  Válido hasta {new Date(quota.ilimitado_hasta).toLocaleDateString("es-VE", { day: "numeric", month: "long", year: "numeric" })}
+                </p>
+              )}
             </div>
           ) : quota ? (
             <div className="space-y-4">

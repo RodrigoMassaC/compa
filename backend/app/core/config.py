@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     r4_webhook_token:      str = ""   # UUID que enviamos a Mibanco para validar webhooks entrantes
     # IPs autorizadas de R4 (para validar webhooks entrantes) — comma-separated
     r4_allowed_ips:        str = "45.175.213.98,200.74.203.91,204.199.249.3"
+    # Si False, NO se rechaza por IP (solo se loguea). Útil mientras Mibanco
+    # confirma sus IPs de salida reales. La autenticación por token UUID sigue
+    # activa. Poner True en producción una vez verificadas las IPs.
+    r4_enforce_ip_whitelist: bool = True
     # Duración de un pago pending antes de marcarlo expired (minutos)
     pago_pending_ttl_min:  int = 30
 

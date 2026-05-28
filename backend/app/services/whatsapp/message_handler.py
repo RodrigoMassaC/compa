@@ -517,15 +517,31 @@ _MONTHLY_LIMITS_WA = {"FREE": 20, "BASIC": 100, "PRO": 500, "ANON": 10, "B2B_EMP
 
 
 async def _verificar_limite_mensual(redis: aioredis.Redis, identifier: str, plan: str) -> bool:
-    """Retorna True si puede consultar, False si alcanzó el límite mensual."""
+    """Retorna True si puede consultar, False si alcanzó el límite mensual.
+
+    Considera el plan ilimitado y el bonus comprado (mismas claves Redis que
+    usa el flujo de pagos y el rate-limiter web).
+    """
     from datetime import date
+    mes   = date.today().strftime("%Y-%m")
     limit = _MONTHLY_LIMITS_WA.get(plan, 20)
-    key   = f"rl:monthly:{identifier}:{date.today().strftime('%Y-%m')}"
+    key   = f"rl:monthly:{identifier}:{mes}"
     try:
+        # Plan ilimitado activo → permitir siempre (solo contar uso)
+        if await redis.get(f"rl:monthly:unlimited:{identifier}"):
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, 35 * 86400)
+            return True
+
+        # Límite efectivo = plan + bonus comprado (packs)
+        bonus = int(await redis.get(f"rl:monthly:bonus:{identifier}:{mes}") or 0)
+        effective_limit = limit + bonus
+
         count = await redis.incr(key)
         if count == 1:
             await redis.expire(key, 35 * 86400)
-        return count <= limit
+        return count <= effective_limit
     except Exception as exc:
         logger.warning("WA monthly_limit error: %s", exc)
         return True  # fail-open

@@ -315,8 +315,15 @@ async def _activar_producto(
     tipo_producto: str,
     cantidad: int,
 ):
-    """Aplica el producto comprado a la cuenta del usuario."""
-    # Asegurar que existe registro quota_consultas
+    """Aplica el producto comprado a la cuenta del usuario.
+
+    IMPORTANTE: el límite mensual se controla en REDIS (rl:monthly:*), no en
+    la tabla quota_consultas. Por eso aquí escribimos en AMBOS:
+      - Redis  → para que el rate-limiter (web + WhatsApp) vea las consultas
+                 al instante. Esto es lo que realmente desbloquea al usuario.
+      - quota_consultas (Postgres) → registro persistente de auditoría.
+    """
+    # 1) Registro persistente en Postgres (auditoría)
     await session.execute(text("""
         INSERT INTO quota_consultas (id_usuario)
         VALUES (:uid)
@@ -332,8 +339,6 @@ async def _activar_producto(
         """), {"c": cantidad or 30, "uid": str(id_usuario)})
 
     elif tipo_producto == "plan_ilimitado_mensual":
-        # Si ya tiene plan activo, EXTIENDE 30 días desde la fecha de expiración
-        # actual. Si no, desde NOW().
         await session.execute(text("""
             UPDATE quota_consultas
             SET plan_ilimitado_hasta = CASE
@@ -347,3 +352,54 @@ async def _activar_producto(
 
     else:
         logger.error(f"_activar_producto: tipo_producto desconocido: {tipo_producto}")
+        return
+
+    # 2) Aplicar en Redis (lo que realmente controla el límite)
+    await _aplicar_en_redis(str(id_usuario), tipo_producto, cantidad or 30)
+
+
+async def _aplicar_en_redis(id_usuario: str, tipo_producto: str, cantidad: int):
+    """Escribe el beneficio comprado en Redis para que el rate-limiter lo vea.
+
+    Claves:
+      rl:monthly:bonus:{uid}:{mes}  → consultas extra del mes (pack)
+      rl:monthly:unlimited:{uid}    → si existe y no expiró → ilimitado
+    """
+    import redis.asyncio as aioredis
+    from datetime import date
+
+    try:
+        redis = aioredis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2
+        )
+    except Exception as exc:
+        logger.error(f"_aplicar_en_redis: no pude conectar a Redis: {exc}")
+        return
+
+    try:
+        if tipo_producto == "consultas_pack_30":
+            mes = date.today().strftime("%Y-%m")
+            key_bonus = f"rl:monthly:bonus:{id_usuario}:{mes}"
+            nuevo = await redis.incrby(key_bonus, cantidad)
+            await redis.expire(key_bonus, 35 * 86400)
+            logger.info(
+                f"💳 Redis bonus actualizado uid={id_usuario} +{cantidad} → {nuevo} ({mes})"
+            )
+
+        elif tipo_producto == "plan_ilimitado_mensual":
+            key_unlim = f"rl:monthly:unlimited:{id_usuario}"
+            ttl_actual = await redis.ttl(key_unlim)  # -2 no existe, -1 sin TTL
+            base = ttl_actual if ttl_actual and ttl_actual > 0 else 0
+            nuevo_ttl = base + 30 * 86400
+            vence = (datetime.utcnow() + timedelta(seconds=nuevo_ttl)).isoformat()
+            await redis.set(key_unlim, vence, ex=nuevo_ttl)
+            logger.info(
+                f"♾️ Redis plan ilimitado uid={id_usuario} vence={vence} ttl={nuevo_ttl}s"
+            )
+    except Exception as exc:
+        logger.error(f"_aplicar_en_redis: error aplicando {tipo_producto}: {exc}")
+    finally:
+        try:
+            await redis.aclose()
+        except Exception:
+            pass
