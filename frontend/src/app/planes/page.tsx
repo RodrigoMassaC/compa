@@ -309,6 +309,7 @@ export default function PlanesPage() {
             </p>
             <div className="flex gap-6 text-sm text-slate-500">
               <Link href="/terminos" className="hover:text-[#3C5ACB]">Términos</Link>
+              <Link href="/privacidad" className="hover:text-[#3C5ACB]">Privacidad</Link>
               <Link href="/chat" className="hover:text-[#3C5ACB]">Chat</Link>
               {user && <Link href="/consultas" className="hover:text-[#3C5ACB]">Mi cuenta</Link>}
             </div>

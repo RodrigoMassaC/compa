@@ -96,6 +96,16 @@ const TagIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+function OnboardStep({ icon, titulo, texto }: { icon: string; titulo: string; texto: string }) {
+  return (
+    <div className="bg-white border border-[#DDE4FA] rounded-2xl p-4 text-center">
+      <div className="text-2xl mb-2">{icon}</div>
+      <p className="font-extrabold text-slate-800 text-sm">{titulo}</p>
+      <p className="text-xs text-slate-400 mt-1 leading-tight">{texto}</p>
+    </div>
+  );
+}
+
 // ── Markdown renderer simple ───────────────────────────────────────────────
 function renderMarkdown(text: string): React.ReactNode[] {
   const lines = text.split("\n");
@@ -371,6 +381,15 @@ export default function ChatPage() {
   useEffect(() => {
     setCurrentUser(getUser());
     setHistorial(cargarHistorial());
+
+    // Si venimos desde /listas con un prompt pre-cargado, lo metemos en el input
+    try {
+      const promptInicial = sessionStorage.getItem("compa_prompt_inicial");
+      if (promptInicial) {
+        setInputValue(promptInicial);
+        sessionStorage.removeItem("compa_prompt_inicial");
+      }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -513,6 +532,15 @@ export default function ChatPage() {
             <span className="text-xl leading-none">+</span> Nueva consulta
           </button>
 
+          {currentUser && (
+            <Link
+              href="/listas"
+              className="w-full mt-3 bg-white border border-[#DDE4FA] hover:bg-[#F5F7FF] text-[#3C5ACB] font-bold py-2.5 px-4 rounded-full flex items-center justify-center gap-2 text-sm transition-colors"
+            >
+              <span className="text-base">📋</span> Mis listas
+            </Link>
+          )}
+
           <div className="mt-8 overflow-y-auto max-h-[340px]">
             {(() => {
               const { hoy, ayer, anterior } = agruparPorFecha(historial);
@@ -628,25 +656,57 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-4 md:pt-24 flex flex-col items-center">
           <div className="w-full max-w-3xl flex flex-col gap-6">
 
-            {/* Estado vacío */}
+            {/* Estado vacío — onboarding */}
             {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center mt-20 text-slate-400">
-                <div className="mb-4">
-                  <Image src="/logo-blue.png" alt="Compa" width={64} height={64} className="rounded-2xl" />
+              <div className="flex flex-col items-center justify-center mt-12 px-4">
+                <div className="mb-5">
+                  <Image src="/logo-blue.png" alt="Compa" width={72} height={72} className="rounded-2xl" />
                 </div>
-                <p className="font-medium text-lg">¿Qué vamos a comprar hoy?</p>
-                <p className="text-sm mt-2">Pregúntame sobre precios en supermercados y farmacias.</p>
-                <div className="flex flex-wrap gap-2 mt-6 justify-center">
-                  {["¿Dónde consigo leche más barata?", "Precio del arroz", "Carrito: leche, arroz, aceite, jabón", "Medicamentos para la gripe"].map((s) => (
+                <h2 className="font-extrabold text-2xl text-slate-800 mb-2 text-center">
+                  {currentUser ? `Hola ${(currentUser.nombre_completo || "").split(" ")[0]} 👋` : "¿Qué vamos a comprar hoy?"}
+                </h2>
+                <p className="text-sm text-slate-500 text-center max-w-md mb-8">
+                  Pregúntame por cualquier producto. Comparo precios en supermercados y farmacias de Venezuela
+                  con tasa BCV en tiempo real.
+                </p>
+
+                {/* 3 pasos visuales */}
+                <div className="grid grid-cols-3 gap-3 max-w-2xl w-full mb-8">
+                  <OnboardStep icon="🔎" titulo="Pregunta" texto="Producto, marca o categoría" />
+                  <OnboardStep icon="⚖️" titulo="Compara" texto="Precios y tiendas al instante" />
+                  <OnboardStep icon="🧺" titulo="Optimiza" texto="Carrito por tienda más barata" />
+                </div>
+
+                {/* Ejemplos clickeables */}
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">
+                  Prueba con uno de estos
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center max-w-2xl">
+                  {[
+                    "Precio del arroz",
+                    "¿Dónde consigo aceite más barato?",
+                    "Carrito: leche, pan, huevos, café",
+                    "Ibuprofeno 400mg",
+                    "Pasta dental Colgate",
+                  ].map((s) => (
                     <button
                       key={s}
                       onClick={() => setInputValue(s)}
-                      className="bg-white border border-[#e5e5e5] shadow-sm rounded-full px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                      className="bg-white border border-[#DDE4FA] hover:border-[#3C5ACB] hover:bg-[#F5F7FF] shadow-sm rounded-full px-4 py-2 text-xs font-bold text-slate-600 hover:text-[#3C5ACB] transition-all"
                     >
                       {s}
                     </button>
                   ))}
                 </div>
+
+                {currentUser && (
+                  <Link
+                    href="/listas"
+                    className="mt-8 text-xs text-slate-400 hover:text-[#3C5ACB] transition-colors flex items-center gap-1"
+                  >
+                    💡 ¿Sueles comprar lo mismo? Guárdalo en una lista →
+                  </Link>
+                )}
               </div>
             )}
 
