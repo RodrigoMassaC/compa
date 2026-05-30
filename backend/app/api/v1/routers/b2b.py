@@ -590,3 +590,359 @@ async def admin_enriquecer_historico(
     from app.services.b2b.enriquecedor import enriquecer_pendientes
     n = await enriquecer_pendientes(db, limite=limite)
     return {"procesadas": n}
+
+
+# ── 10. GET /b2b/empresa/me/productos (PRO+) ────────────────────────────────
+
+def _require_plan_min(empresa: dict, minimo: str) -> None:
+    """Bloquea si el plan de la empresa es inferior al mínimo requerido."""
+    orden = {"basico": 1, "pro": 2, "premium": 3}
+    if orden.get(empresa["plan"], 0) < orden.get(minimo, 999):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Esta función requiere plan {minimo.upper()} o superior. Tu plan actual: {empresa['plan'].upper()}.",
+        )
+
+
+@router.get("/empresa/me/productos")
+async def listado_productos(
+    categoria: Optional[str] = None,
+    limite: int = 50,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Listado detallado de productos por SKU — requiere plan PRO o PREMIUM.
+
+    Devuelve productos_maestros con su precio promedio del mercado,
+    número de cadenas en las que está disponible y volatilidad reciente.
+    Ordenado por volatilidad descendente (los más interesantes primero).
+    """
+    empresa = await _require_empresa(db, user["id_usuario"])
+    _require_plan_min(empresa, "pro")
+
+    r = await db.execute(text("""
+        WITH tasa AS (
+            SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
+        ),
+        precios_recientes AS (
+            SELECT DISTINCT ON (pc.id_producto_maestro, e.id_cadena)
+                pc.id_producto_maestro,
+                pm.nombre_estandar,
+                pm.marca,
+                pm.presentacion,
+                pm.categoria,
+                cc.nombre_cadena,
+                CASE
+                    WHEN hp.moneda_origen = 'USD' THEN hp.precio_bruto
+                    WHEN hp.moneda_origen = 'VES' THEN hp.precio_bruto / (SELECT valor_usd FROM tasa)
+                END AS precio_usd
+            FROM historial_precios hp
+            JOIN productos_crudos pc  ON pc.id_producto_crudo = hp.id_producto_crudo
+            JOIN productos_maestros pm ON pm.id_producto_maestro = pc.id_producto_maestro
+            JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+            JOIN cadenas_comerciales cc ON cc.id_cadena = e.id_cadena
+            WHERE hp.fecha_lectura >= NOW() - INTERVAL '30 days'
+              AND NOT (
+                (hp.moneda_origen = 'VES' AND hp.precio_bruto < 1)
+                OR (hp.moneda_origen = 'USD' AND hp.precio_bruto < 0.05)
+              )
+              AND (:cat::text IS NULL OR pm.categoria = :cat)
+            ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+        )
+        SELECT
+            id_producto_maestro::text,
+            nombre_estandar,
+            marca,
+            presentacion,
+            categoria,
+            COUNT(DISTINCT nombre_cadena) AS cadenas,
+            ROUND(MIN(precio_usd)::numeric, 2) AS precio_min,
+            ROUND(MAX(precio_usd)::numeric, 2) AS precio_max,
+            ROUND(AVG(precio_usd)::numeric, 2) AS precio_promedio,
+            ROUND(((MAX(precio_usd) - MIN(precio_usd)) / NULLIF(AVG(precio_usd), 0) * 100)::numeric, 1) AS volatilidad
+        FROM precios_recientes
+        GROUP BY id_producto_maestro, nombre_estandar, marca, presentacion, categoria
+        HAVING COUNT(DISTINCT nombre_cadena) >= 2
+        ORDER BY volatilidad DESC NULLS LAST
+        LIMIT :lim
+    """), {"cat": categoria, "lim": min(limite, 200)})
+
+    return [dict(row) for row in r.mappings().all()]
+
+
+# ── 11. GET /b2b/empresa/me/alertas (PRO+) ──────────────────────────────────
+
+@router.get("/empresa/me/alertas")
+async def alertas_inteligentes(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Alertas inteligentes — requiere plan PRO o PREMIUM.
+
+    Detecta:
+      - Caídas de precio >15% en últimos 7 días (oportunidad / amenaza)
+      - Subidas de precio >15% en últimos 7 días
+      - Rubros con incremento súbito de búsquedas (>40% vs mes anterior)
+    """
+    empresa = await _require_empresa(db, user["id_usuario"])
+    _require_plan_min(empresa, "pro")
+
+    alertas = []
+
+    # 1. Cambios de precio fuertes
+    r1 = await db.execute(text("""
+        WITH tasa AS (
+            SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1
+        ),
+        precios_norm AS (
+            SELECT
+                pc.id_producto_maestro,
+                pm.nombre_estandar,
+                pm.categoria,
+                cc.nombre_cadena,
+                CASE
+                    WHEN hp.moneda_origen = 'USD' THEN hp.precio_bruto
+                    WHEN hp.moneda_origen = 'VES' THEN hp.precio_bruto / (SELECT valor_usd FROM tasa)
+                END AS precio_usd,
+                hp.fecha_lectura
+            FROM historial_precios hp
+            JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
+            JOIN productos_maestros pm ON pm.id_producto_maestro = pc.id_producto_maestro
+            JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+            JOIN cadenas_comerciales cc ON cc.id_cadena = e.id_cadena
+            WHERE hp.fecha_lectura >= NOW() - INTERVAL '21 days'
+              AND NOT (
+                (hp.moneda_origen = 'VES' AND hp.precio_bruto < 1)
+                OR (hp.moneda_origen = 'USD' AND hp.precio_bruto < 0.05)
+              )
+        ),
+        actual AS (
+            SELECT DISTINCT ON (id_producto_maestro, nombre_cadena)
+                id_producto_maestro, nombre_estandar, categoria, nombre_cadena, precio_usd
+            FROM precios_norm
+            WHERE fecha_lectura >= NOW() - INTERVAL '7 days'
+            ORDER BY id_producto_maestro, nombre_cadena, fecha_lectura DESC
+        ),
+        previo AS (
+            SELECT DISTINCT ON (id_producto_maestro, nombre_cadena)
+                id_producto_maestro, nombre_cadena, precio_usd
+            FROM precios_norm
+            WHERE fecha_lectura BETWEEN NOW() - INTERVAL '21 days' AND NOW() - INTERVAL '7 days'
+            ORDER BY id_producto_maestro, nombre_cadena, fecha_lectura DESC
+        )
+        SELECT
+            a.nombre_estandar,
+            a.categoria,
+            a.nombre_cadena,
+            a.precio_usd AS precio_actual,
+            p.precio_usd AS precio_previo,
+            ROUND(((a.precio_usd - p.precio_usd) / NULLIF(p.precio_usd, 0) * 100)::numeric, 1) AS variacion_pct
+        FROM actual a
+        JOIN previo p USING (id_producto_maestro, nombre_cadena)
+        WHERE ABS((a.precio_usd - p.precio_usd) / NULLIF(p.precio_usd, 0)) > 0.15
+        ORDER BY ABS(a.precio_usd - p.precio_usd) DESC
+        LIMIT 25
+    """))
+    for row in r1.mappings().all():
+        d = dict(row)
+        v = float(d["variacion_pct"] or 0)
+        tipo = "precio_baja" if v < 0 else "precio_sube"
+        alertas.append({
+            "tipo": tipo,
+            "severidad": "alta" if abs(v) > 25 else "media",
+            "titulo": f"{'Bajó' if v < 0 else 'Subió'} {d['nombre_estandar'][:60]} en {d['nombre_cadena']}",
+            "detalle": f"{abs(v)}% — pasó de ${float(d['precio_previo']):.2f} a ${float(d['precio_actual']):.2f}",
+            "categoria": d["categoria"],
+            "cadena": d["nombre_cadena"],
+        })
+
+    # 2. Rubros con incremento súbito de búsquedas
+    r2 = await db.execute(text("""
+        WITH este_mes AS (
+            SELECT rubro_detectado AS rubro, COUNT(*) AS n
+            FROM consultas_usuarios
+            WHERE fecha_consulta >= date_trunc('month', NOW())
+              AND rubro_detectado IS NOT NULL
+            GROUP BY rubro_detectado
+        ),
+        mes_anterior AS (
+            SELECT rubro_detectado AS rubro, COUNT(*) AS n
+            FROM consultas_usuarios
+            WHERE fecha_consulta >= date_trunc('month', NOW() - INTERVAL '1 month')
+              AND fecha_consulta < date_trunc('month', NOW())
+              AND rubro_detectado IS NOT NULL
+            GROUP BY rubro_detectado
+        )
+        SELECT
+            e.rubro,
+            e.n AS actual,
+            COALESCE(m.n, 0) AS anterior,
+            CASE WHEN COALESCE(m.n, 0) > 5
+                 THEN ROUND(((e.n - m.n)::numeric / m.n * 100), 0)
+                 ELSE NULL END AS variacion_pct
+        FROM este_mes e
+        LEFT JOIN mes_anterior m USING (rubro)
+        WHERE COALESCE(m.n, 0) > 5
+          AND (e.n - m.n)::float / m.n > 0.40
+        ORDER BY variacion_pct DESC
+        LIMIT 10
+    """))
+    for row in r2.mappings().all():
+        d = dict(row)
+        alertas.append({
+            "tipo": "interes_sube",
+            "severidad": "media",
+            "titulo": f"Subió interés en {d['rubro'].replace('_', ' ')}",
+            "detalle": f"+{int(d['variacion_pct'])}% vs mes anterior ({d['actual']} vs {d['anterior']} consultas)",
+            "categoria": d["rubro"],
+            "cadena": None,
+        })
+
+    return {"alertas": alertas, "total": len(alertas)}
+
+
+# ── 12. GET /b2b/empresa/me/insights (PREMIUM) ──────────────────────────────
+
+@router.get("/empresa/me/insights")
+async def insights_estrategicos(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Insights estratégicos — requiere plan PREMIUM.
+
+    Genera observaciones contextuales a partir de los datos del dashboard.
+    Por ahora rule-based (sin LLM) para garantía de costo cero. Cuando se
+    apruebe presupuesto, se enchufa una llamada a Claude para insights
+    más ricos.
+    """
+    empresa = await _require_empresa(db, user["id_usuario"])
+    _require_plan_min(empresa, "premium")
+    nombre = empresa["nombre_comercial"]
+
+    insights = []
+
+    # Insight 1: Posición vs mercado en mi rubro
+    r1 = await db.execute(text("""
+        SELECT cadena_mencionada, COUNT(*) AS n
+        FROM consultas_usuarios
+        WHERE fecha_consulta >= NOW() - INTERVAL '30 days'
+          AND cadena_mencionada IS NOT NULL
+        GROUP BY cadena_mencionada
+        ORDER BY n DESC
+    """))
+    cadenas = list(r1.mappings().all())
+    mi_pos = next((i+1 for i, c in enumerate(cadenas) if c["cadena_mencionada"].lower() == nombre.lower()), None)
+    if mi_pos:
+        insights.append({
+            "icono": "🏆",
+            "titulo": f"Estás en posición #{mi_pos} de {len(cadenas)} en menciones del mes",
+            "texto": (
+                f"De {len(cadenas)} cadenas detectadas en consultas, {nombre} ocupa el lugar {mi_pos}. "
+                + ("Líder de share of voice — capitaliza con campañas." if mi_pos == 1
+                   else f"Te separan {cadenas[0]['n'] - cadenas[mi_pos-1]['n']} menciones del líder.")
+            ),
+            "tipo": "posicionamiento",
+        })
+
+    # Insight 2: Rubro de crecimiento
+    r2 = await db.execute(text("""
+        WITH este AS (
+            SELECT rubro_detectado AS r, COUNT(*) AS n
+            FROM consultas_usuarios
+            WHERE fecha_consulta >= NOW() - INTERVAL '30 days' AND rubro_detectado IS NOT NULL
+            GROUP BY rubro_detectado
+        ),
+        ant AS (
+            SELECT rubro_detectado AS r, COUNT(*) AS n
+            FROM consultas_usuarios
+            WHERE fecha_consulta BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
+              AND rubro_detectado IS NOT NULL
+            GROUP BY rubro_detectado
+        )
+        SELECT e.r, e.n, COALESCE(a.n, 0) AS prev,
+               ROUND(((e.n - COALESCE(a.n, 0))::numeric / NULLIF(a.n, 0) * 100), 0) AS crec
+        FROM este e LEFT JOIN ant a USING (r)
+        WHERE COALESCE(a.n, 0) >= 10
+        ORDER BY crec DESC NULLS LAST
+        LIMIT 1
+    """))
+    top_crec = r2.mappings().first()
+    if top_crec and top_crec.get("crec"):
+        insights.append({
+            "icono": "📈",
+            "titulo": f"Rubro en alza: {top_crec['r'].replace('_', ' ').title()}",
+            "texto": (
+                f"+{int(top_crec['crec'])}% de consultas vs el mes anterior. "
+                f"Considera campañas dirigidas, ofertas o asegurar inventario en esta categoría."
+            ),
+            "tipo": "oportunidad",
+        })
+
+    # Insight 3: Concentración geográfica
+    r3 = await db.execute(text("""
+        SELECT COALESCE(u.ciudad, 'desconocida') AS ciudad, COUNT(*) AS n
+        FROM consultas_usuarios c
+        JOIN usuarios u ON u.id_usuario = c.id_usuario
+        WHERE c.fecha_consulta >= NOW() - INTERVAL '30 days'
+          AND u.ciudad IS NOT NULL
+        GROUP BY u.ciudad
+        ORDER BY n DESC
+        LIMIT 3
+    """))
+    ciudades = list(r3.mappings().all())
+    if len(ciudades) >= 1:
+        total = sum(c["n"] for c in ciudades)
+        top = ciudades[0]
+        pct = round(top["n"] / total * 100) if total else 0
+        insights.append({
+            "icono": "📍",
+            "titulo": f"{top['ciudad']} concentra {pct}% de tu audiencia top-3",
+            "texto": (
+                f"De las {len(ciudades)} ciudades con más actividad, {top['ciudad']} es la principal. "
+                f"Asegura sucursales fuertes ahí y mide si tu pricing es competitivo en esa zona."
+            ),
+            "tipo": "zona",
+        })
+
+    # Insight 4: Categorías con más volatilidad de precios → recomendación de monitoreo
+    r4 = await db.execute(text("""
+        WITH tasa AS (SELECT valor_usd FROM historico_tasa_bcv ORDER BY fecha DESC LIMIT 1),
+        rp AS (
+            SELECT DISTINCT ON (pc.id_producto_maestro, e.id_cadena)
+                pm.categoria,
+                CASE WHEN hp.moneda_origen='USD' THEN hp.precio_bruto
+                     ELSE hp.precio_bruto/(SELECT valor_usd FROM tasa) END AS p
+            FROM historial_precios hp
+            JOIN productos_crudos pc ON pc.id_producto_crudo = hp.id_producto_crudo
+            JOIN productos_maestros pm ON pm.id_producto_maestro = pc.id_producto_maestro
+            JOIN establecimientos e ON e.id_establecimiento = pc.id_establecimiento
+            WHERE hp.fecha_lectura >= NOW() - INTERVAL '30 days'
+              AND NOT ((hp.moneda_origen='VES' AND hp.precio_bruto<1) OR (hp.moneda_origen='USD' AND hp.precio_bruto<0.05))
+            ORDER BY pc.id_producto_maestro, e.id_cadena, hp.fecha_lectura DESC
+        )
+        SELECT categoria,
+               ROUND((STDDEV(p) / NULLIF(AVG(p), 0) * 100)::numeric, 1) AS dispersion
+        FROM rp
+        WHERE categoria IS NOT NULL
+        GROUP BY categoria
+        HAVING COUNT(*) > 5
+        ORDER BY dispersion DESC NULLS LAST
+        LIMIT 1
+    """))
+    top_disp = r4.mappings().first()
+    if top_disp and top_disp.get("dispersion"):
+        insights.append({
+            "icono": "⚖️",
+            "titulo": f"Mucha dispersión de precios en {top_disp['categoria'].replace('_', ' ')}",
+            "texto": (
+                f"Esta categoría tiene {top_disp['dispersion']}% de dispersión entre cadenas — "
+                f"hay margen para diferenciarte por pricing. Revisa tus precios contra el promedio del mercado."
+            ),
+            "tipo": "margen",
+        })
+
+    return {
+        "insights": insights,
+        "generado_en": "rule-based v1",
+        "nota": "Generados a partir de patrones reales en tu dashboard. Premium tradicional incluye sesiones humanas para profundizar.",
+    }
