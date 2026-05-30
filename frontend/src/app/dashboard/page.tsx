@@ -323,7 +323,7 @@ function TabDemografia({ data }: { data: Demograficos | null }) {
           <div className="h-64">
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={data.por_sexo} dataKey="n" nameKey="sexo" outerRadius={80} label={(e: { sexo: string; n: number }) => `${e.sexo}: ${e.n}`}>
+                <Pie data={data.por_sexo} dataKey="n" nameKey="sexo" outerRadius={80} label={({ name, value }: { name?: string; value?: number }) => `${name ?? ""}: ${value ?? 0}`}>
                   {data.por_sexo.map((_, i) => <Cell key={i} fill={PALETA[i % PALETA.length]} />)}
                 </Pie>
                 <Tooltip />
