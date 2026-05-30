@@ -42,14 +42,26 @@ async def log_consulta(
     """
     tipo_db = _TIPO_MAP.get(accion, "PRODUCTO_UNICO")
 
+    # Enriquecer al loguear (rubro + cadena_mencionada). Sin LLM, regex puro.
+    # Si falla, no afecta el insert.
+    rubro: str | None = None
+    cadena: str | None = None
+    try:
+        from app.services.b2b.enriquecedor import enriquecer
+        rubro, cadena = enriquecer(texto)
+    except Exception as exc:
+        logger.debug("event_logger: enriquecer falló — %s", exc)
+
     try:
         await db.execute(
             text("""
                 INSERT INTO consultas_usuarios
                     (id_consulta, id_usuario, texto_consulta_original,
-                     tipo_consulta, canal_origen, tokens_ia_consumidos)
+                     tipo_consulta, canal_origen, tokens_ia_consumidos,
+                     rubro_detectado, cadena_mencionada, enriquecida_en)
                 VALUES
-                    (:id, :usuario, :texto, :tipo, :canal, :tokens)
+                    (:id, :usuario, :texto, :tipo, :canal, :tokens,
+                     :rubro, :cadena, NOW())
             """),
             {
                 "id":      str(uuid.uuid4()),
@@ -58,6 +70,8 @@ async def log_consulta(
                 "tipo":    tipo_db,
                 "canal":   canal,
                 "tokens":  tokens,
+                "rubro":   rubro,
+                "cadena":  cadena,
             },
         )
         await db.commit()
