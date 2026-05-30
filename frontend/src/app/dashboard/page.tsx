@@ -143,6 +143,12 @@ export default function DashboardPage() {
   const [insights, setInsights] = useState<{ insights: Insight[] } | null>(null);
 
   useEffect(() => {
+    // Modo demo: ?demo=basico|pro|premium → llena con data ejemplo sin auth ni API
+    const demoPlan = new URLSearchParams(window.location.search).get("demo") as Plan | null;
+    if (demoPlan === "basico" || demoPlan === "pro" || demoPlan === "premium") {
+      cargarDemo(demoPlan);
+      return;
+    }
     const user = getUser();
     if (!user) { router.push("/auth?next=/dashboard"); return; }
     if (user.rol_usuario !== "B2B_EMPRESA" && user.rol_usuario !== "ADMIN") {
@@ -150,6 +156,130 @@ export default function DashboardPage() {
     }
     cargarEmpresa();
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function cargarDemo(plan: Plan) {
+    setEmpresa({
+      id_empresa: "demo", nombre_comercial: "Farmacia Bermúdez (Demo)", plan,
+      estado: "activa", activa_hasta: "2026-12-31T00:00:00Z", sector: "farmacia", rol: "owner",
+    });
+    setDash({
+      empresa: { nombre: "Farmacia Bermúdez", plan },
+      kpis: {
+        consultas_mes_total: 18450,
+        menciones_mi_cadena_mes: 642,
+        porcentaje_menciones: 3.48,
+        rubros_top: [
+          { rubro: "farmacia_analgesicos", n: 312 },
+          { rubro: "lacteos_leche", n: 287 },
+          { rubro: "higiene_bucal", n: 245 },
+          { rubro: "papel_higienico", n: 198 },
+          { rubro: "limpieza_hogar", n: 156 },
+        ],
+      },
+      tasa_bcv: {
+        actual: 142.85,
+        evolucion: Array.from({length: 30}, (_, i) => ({
+          fecha: `05-${String(i+1).padStart(2,'0')}`,
+          valor: 138 + Math.sin(i/4) * 3 + i * 0.18,
+        })),
+      },
+    });
+    setPrecios([
+      { categoria: "farmacia_analgesicos", productos: 42, precio_min: 1.20, precio_max: 8.50, precio_promedio: 3.85, precio_mediano: 3.20 },
+      { categoria: "lacteos_leche", productos: 28, precio_min: 2.50, precio_max: 6.20, precio_promedio: 4.10, precio_mediano: 4.00 },
+      { categoria: "higiene_bucal", productos: 35, precio_min: 1.80, precio_max: 12.50, precio_promedio: 5.60, precio_mediano: 4.80 },
+      { categoria: "limpieza_hogar", productos: 51, precio_min: 0.90, precio_max: 9.00, precio_promedio: 3.40, precio_mediano: 3.00 },
+      { categoria: "papel_higienico", productos: 18, precio_min: 2.20, precio_max: 7.50, precio_promedio: 4.20, precio_mediano: 4.00 },
+      { categoria: "snacks_galletas", productos: 67, precio_min: 0.50, precio_max: 5.40, precio_promedio: 1.90, precio_mediano: 1.60 },
+    ]);
+    setDemo({
+      por_sexo: [
+        { sexo: "F", n: 4820 },
+        { sexo: "M", n: 3640 },
+        { sexo: "no_indica", n: 1200 },
+      ],
+      por_ciudad: [
+        { ciudad: "Caracas", n: 4521 },
+        { ciudad: "Maracaibo", n: 1820 },
+        { ciudad: "Valencia", n: 1632 },
+        { ciudad: "Barquisimeto", n: 1124 },
+        { ciudad: "Maracay", n: 980 },
+      ],
+      por_estado: [
+        { estado: "Distrito Capital", n: 5234 },
+        { estado: "Zulia", n: 2120 },
+        { estado: "Carabobo", n: 1845 },
+        { estado: "Lara", n: 1320 },
+        { estado: "Aragua", n: 1180 },
+      ],
+    });
+    setTend({
+      top_rubros: [
+        { rubro: "farmacia_analgesicos", consultas: 892 },
+        { rubro: "lacteos_leche", consultas: 745 },
+        { rubro: "higiene_bucal", consultas: 612 },
+        { rubro: "papel_higienico", consultas: 540 },
+        { rubro: "limpieza_hogar", consultas: 480 },
+        { rubro: "snacks_galletas", consultas: 410 },
+        { rubro: "bebidas_gaseosas", consultas: 385 },
+        { rubro: "aceites_vinagres", consultas: 340 },
+      ],
+      evolucion_mensual: [
+        {mes:"2025-06",consultas:8200},{mes:"2025-07",consultas:9100},
+        {mes:"2025-08",consultas:10500},{mes:"2025-09",consultas:11800},
+        {mes:"2025-10",consultas:13200},{mes:"2025-11",consultas:14500},
+        {mes:"2025-12",consultas:15200},{mes:"2026-01",consultas:14800},
+        {mes:"2026-02",consultas:16100},{mes:"2026-03",consultas:17500},
+        {mes:"2026-04",consultas:17800},{mes:"2026-05",consultas:18450},
+      ],
+    });
+    setVis({
+      menciones_mensual: [
+        {mes:"2025-06",menciones:380},{mes:"2025-07",menciones:420},
+        {mes:"2025-08",menciones:445},{mes:"2025-09",menciones:498},
+        {mes:"2025-10",menciones:520},{mes:"2025-11",menciones:565},
+        {mes:"2025-12",menciones:580},{mes:"2026-01",menciones:545},
+        {mes:"2026-02",menciones:602},{mes:"2026-03",menciones:625},
+        {mes:"2026-04",menciones:618},{mes:"2026-05",menciones:642},
+      ],
+      ranking_cadenas: [
+        {cadena:"Farmatodo", menciones: 1820},
+        {cadena:"Locatel", menciones: 980},
+        {cadena:"Farmacia Bermúdez", menciones: 642},
+        {cadena:"Farmago", menciones: 410},
+        {cadena:"Central Madeirense", menciones: 280},
+        {cadena:"Excelsior Gama", menciones: 195},
+      ],
+      clicks_30d: { total: 2840, web: 1620, whatsapp: 1220 },
+    });
+    setProductos([
+      { id_producto_maestro:"p1", nombre_estandar:"Ibuprofeno 400mg 20 tabletas", marca:"Genven", presentacion:"20 tab", categoria:"farmacia_analgesicos", cadenas:4, precio_min:1.20, precio_max:3.80, precio_promedio:2.30, volatilidad:78.2 },
+      { id_producto_maestro:"p2", nombre_estandar:"Atamel Forte 500mg 30 tabletas", marca:"Cofarvene", presentacion:"30 tab", categoria:"farmacia_analgesicos", cadenas:5, precio_min:1.50, precio_max:4.20, precio_promedio:2.85, volatilidad:62.1 },
+      { id_producto_maestro:"p3", nombre_estandar:"Leche entera Plumrose 1L", marca:"Plumrose", presentacion:"1L", categoria:"lacteos_leche", cadenas:5, precio_min:3.10, precio_max:5.20, precio_promedio:4.05, volatilidad:42.5 },
+      { id_producto_maestro:"p4", nombre_estandar:"Colgate Total 12 Crema Dental 100ml", marca:"Colgate", presentacion:"100ml", categoria:"higiene_bucal", cadenas:5, precio_min:2.80, precio_max:4.60, precio_promedio:3.50, volatilidad:38.9 },
+      { id_producto_maestro:"p5", nombre_estandar:"Loratadina 10mg 10 tab", marca:"Genven", presentacion:"10 tab", categoria:"farmacia_alergia", cadenas:3, precio_min:0.80, precio_max:2.40, precio_promedio:1.50, volatilidad:88.4 },
+      { id_producto_maestro:"p6", nombre_estandar:"Omeprazol 20mg 14 cápsulas", marca:"Genven", presentacion:"14 cap", categoria:"farmacia_gastro", cadenas:4, precio_min:1.10, precio_max:3.20, precio_promedio:2.05, volatilidad:72.5 },
+    ]);
+    setAlertas({
+      total: 5,
+      alertas: [
+        { tipo:"precio_baja", severidad:"alta", titulo:"Bajó Ibuprofeno 400mg 20 tab Genven en Farmatodo", detalle:"−31% — pasó de $2.20 a $1.52", categoria:"farmacia_analgesicos", cadena:"Farmatodo" },
+        { tipo:"precio_sube", severidad:"alta", titulo:"Subió Leche entera Plumrose 1L en Central Madeirense", detalle:"+27% — pasó de $3.80 a $4.83", categoria:"lacteos_leche", cadena:"Central Madeirense" },
+        { tipo:"interes_sube", severidad:"media", titulo:"Subió interés en farmacia alergia", detalle:"+62% vs mes anterior (148 vs 91 consultas)", categoria:"farmacia_alergia", cadena:null },
+        { tipo:"precio_baja", severidad:"media", titulo:"Bajó Colgate Total Crema Dental 100ml en Locatel", detalle:"−18% — pasó de $4.20 a $3.45", categoria:"higiene_bucal", cadena:"Locatel" },
+        { tipo:"interes_sube", severidad:"media", titulo:"Subió interés en bebidas gaseosas", detalle:"+45% vs mes anterior", categoria:"bebidas_gaseosas", cadena:null },
+      ],
+    });
+    setInsights({
+      insights: [
+        { icono:"🏆", titulo:"Estás en posición #3 de 6 en menciones del mes", texto:"De 6 cadenas detectadas en consultas, Farmacia Bermúdez ocupa el lugar 3. Te separan 1178 menciones del líder. Hay oportunidad de invertir en visibilidad para subir al podio.", tipo:"posicionamiento" },
+        { icono:"📈", titulo:"Rubro en alza: Farmacia Alergia", texto:"+62% de consultas vs el mes anterior. Considera campañas dirigidas, ofertas o asegurar inventario en esta categoría.", tipo:"oportunidad" },
+        { icono:"📍", titulo:"Caracas concentra 53% de tu audiencia top-3", texto:"De las 3 ciudades con más actividad, Caracas es la principal. Asegura sucursales fuertes ahí y mide si tu pricing es competitivo en esa zona.", tipo:"zona" },
+        { icono:"⚖️", titulo:"Mucha dispersión de precios en farmacia analgésicos", texto:"Esta categoría tiene 78.2% de dispersión entre cadenas — hay margen para diferenciarte por pricing. Revisa tus precios contra el promedio del mercado.", tipo:"margen" },
+      ],
+    });
+    setLoading(false);
+  }
 
   async function fetchAuth<T>(path: string): Promise<T> {
     const token = getToken();
