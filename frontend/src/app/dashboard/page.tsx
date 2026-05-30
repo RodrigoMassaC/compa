@@ -1,509 +1,481 @@
 "use client";
-
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { getUser } from "@/lib/auth";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+import { getToken, getUser } from "@/lib/auth";
 import {
-    LayoutDashboard,
-    TrendingUp,
-    Users,
-    Download,
-    FileText,
-    LogOut,
-    Search,
-    Bell,
-    User,
-    Filter,
-} from "lucide-react";
-import {
-    LineChart,
-    Line,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    ResponsiveContainer,
-    Legend,
+  ResponsiveContainer,
+  LineChart, Line,
+  BarChart, Bar,
+  PieChart, Pie, Cell,
+  XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 
-// --- Mock Data ---
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const PALETA = ["#3C5ACB", "#DDDD4A", "#6B7FD7", "#9EB1F0", "#2F47A8", "#C8C830", "#1E2E7A"];
 
-const mockChartData = [
-    { date: "01/03", usd: 1.5, ves: 54.2 },
-    { date: "05/03", usd: 1.52, ves: 54.9 },
-    { date: "10/03", usd: 1.48, ves: 55.1 },
-    { date: "15/03", usd: 1.55, ves: 56.0 },
-    { date: "20/03", usd: 1.5, ves: 56.5 },
-    { date: "25/03", usd: 1.49, ves: 56.8 },
-    { date: "30/03", usd: 1.5, ves: 57.0 },
-];
-// --- Types ---
-interface Oferta {
-    cadena?: string;
-    precio_usd?: number;
-    precio_ves?: number;
+type Tab = "resumen" | "precios" | "demografia" | "tendencias" | "visibilidad";
+
+interface Empresa {
+  id_empresa: string;
+  nombre_comercial: string;
+  plan: string;
+  estado: string;
+  activa_hasta: string | null;
+  sector: string | null;
+  rol: string;
 }
 
-interface Product {
-    nombre?: string;
-    marca?: string;
-    tienda?: string;
-    precio_usd?: number;
-    precio_ves?: number;
-    fecha?: string;
-    imagen?: string;
-    ofertas?: Oferta[];
-    [key: string]: unknown;
+interface DashboardKPI {
+  empresa: { nombre: string; plan: string };
+  kpis: {
+    consultas_mes_total: number;
+    menciones_mi_cadena_mes: number;
+    porcentaje_menciones: number;
+    rubros_top: { rubro: string; n: number }[];
+  };
+  tasa_bcv: { actual: number | null; evolucion: { fecha: string; valor: number }[] };
 }
 
-export default function Dashboard() {
-    const router = useRouter();
-    const [searchQuery, setSearchQuery] = useState("");
-    const [products, setProducts] = useState<Product[]>([]);
-    const [loading, setLoading] = useState(true);
+interface PrecioRubro {
+  categoria: string;
+  productos: number;
+  precio_min: number;
+  precio_max: number;
+  precio_promedio: number;
+  precio_mediano: number;
+}
 
-    // Guard: solo B2B_EMPRESA y ADMIN pueden acceder
-    useEffect(() => {
-        const user = getUser();
-        if (!user) { router.replace("/auth"); return; }
-        if (user.rol_usuario !== "B2B_EMPRESA" && user.rol_usuario !== "ADMIN") {
-            router.replace("/chat");
-        }
-    }, [router]);
+interface Demograficos {
+  por_sexo:   { sexo: string;   n: number }[];
+  por_ciudad: { ciudad: string; n: number }[];
+  por_estado: { estado: string; n: number }[];
+}
 
-    // Fetch real data from backend
-    useEffect(() => {
-        const fetchProducts = async () => {
-            try {
-                setLoading(true);
-                const res = await fetch(`${API}/catalog/productos/buscar?q=ac`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setProducts(data.resultados || []);
-                } else {
-                    console.error("Failed to fetch products");
-                }
-            } catch (error) {
-                console.error("Error fetching products:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
+interface Tendencias {
+  top_rubros: { rubro: string; consultas: number }[];
+  evolucion_mensual: { mes: string; consultas: number }[];
+}
 
-        fetchProducts();
-    }, []);
+interface Visibilidad {
+  menciones_mensual: { mes: string; menciones: number }[];
+  ranking_cadenas: { cadena: string; menciones: number }[];
+  clicks_30d: { total: number; web: number; whatsapp: number };
+}
 
+export default function DashboardPage() {
+  const router = useRouter();
+  const [empresa, setEmpresa]   = useState<Empresa | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [sinEmpresa, setSinEmpresa] = useState(false);
+  const [tab, setTab]           = useState<Tab>("resumen");
+
+  const [dash, setDash]         = useState<DashboardKPI | null>(null);
+  const [precios, setPrecios]   = useState<PrecioRubro[] | null>(null);
+  const [demo, setDemo]         = useState<Demograficos | null>(null);
+  const [tend, setTend]         = useState<Tendencias | null>(null);
+  const [vis, setVis]           = useState<Visibilidad | null>(null);
+
+  useEffect(() => {
+    const user = getUser();
+    if (!user) {
+      router.push("/auth?next=/dashboard");
+      return;
+    }
+    if (user.rol_usuario !== "B2B_EMPRESA" && user.rol_usuario !== "ADMIN") {
+      router.push("/empresas");
+      return;
+    }
+    cargarEmpresa();
+  }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchAuth<T>(path: string): Promise<T> {
+    const token = getToken();
+    const r = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error(`Error ${r.status} en ${path}`);
+    return r.json();
+  }
+
+  async function cargarEmpresa() {
+    setLoading(true);
+    setErrorMsg(null);
+    const token = getToken();
+    try {
+      const r = await fetch(`${API}/b2b/empresa/me`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.status === 404) {
+        setSinEmpresa(true);
+        setLoading(false);
+        return;
+      }
+      if (!r.ok) throw new Error("No se pudo cargar la empresa");
+      setEmpresa(await r.json());
+      setDash(await fetchAuth<DashboardKPI>("/b2b/empresa/me/dashboard"));
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : "Error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function cargarTab(t: Tab) {
+    setTab(t);
+    setErrorMsg(null);
+    try {
+      if (t === "precios"     && !precios) setPrecios(await fetchAuth<PrecioRubro[]>("/b2b/empresa/me/precios"));
+      if (t === "demografia"  && !demo)    setDemo(await fetchAuth<Demograficos>("/b2b/empresa/me/demograficos"));
+      if (t === "tendencias"  && !tend)    setTend(await fetchAuth<Tendencias>("/b2b/empresa/me/tendencias"));
+      if (t === "visibilidad" && !vis)     setVis(await fetchAuth<Visibilidad>("/b2b/empresa/me/visibilidad"));
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : "Error cargando datos");
+    }
+  }
+
+  if (sinEmpresa) {
     return (
-        <div className="flex h-screen bg-gray-50 text-gray-900 font-sans">
-            {/* Sidebar */}
-            <aside className="w-64 bg-white border-r border-gray-200 flex flex-col justify-between hidden md:flex shrink-0">
-                <div>
-                    <div className="h-16 flex items-center px-6 border-b border-gray-200">
-                        <span className="text-xl font-bold text-[#3C5ACB] mr-2">Compa</span>
-                        <span className="text-sm text-gray-500 font-medium">
-                            Market Intelligence
-                        </span>
-                    </div>
-                    <nav className="p-4 space-y-1">
-                        <a
-                            href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium bg-[#EEF1FD] text-[#3C5ACB] rounded-lg"
-                        >
-                            <LayoutDashboard className="w-5 h-5 mr-3" />
-                            Resumen
-                        </a>
-                        <a
-                            href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <TrendingUp className="w-5 h-5 mr-3 text-gray-400" />
-                            Tendencias
-                        </a>
-                        <a
-                            href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <Users className="w-5 h-5 mr-3 text-gray-400" />
-                            Competencia
-                        </a>
-                        <a
-                            href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <Download className="w-5 h-5 mr-3 text-gray-400" />
-                            Exportar
-                        </a>
-                        <a
-                            href="#"
-                            className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            <FileText className="w-5 h-5 mr-3 text-gray-400" />
-                            Facturación
-                        </a>
-                    </nav>
-                </div>
-                <div className="p-4 border-t border-gray-200">
-                    <button className="flex items-center w-full px-3 py-2 text-sm font-medium text-gray-700 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors">
-                        <LogOut className="w-5 h-5 mr-3 text-gray-400 group-hover:text-red-600" />
-                        Cerrar sesión
-                    </button>
-                </div>
-            </aside>
-
-            {/* Main Content */}
-            <main className="flex-1 flex flex-col overflow-hidden">
-                {/* Header */}
-                <header className="h-16 bg-white border-b border-gray-200 flex flex-col justify-center px-8 shrink-0 relative z-10 shadow-sm">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-xl font-bold text-gray-900 leading-tight">
-                                Resumen Analítico
-                            </h1>
-                            <p className="text-sm text-gray-500">Bienvenido de nuevo</p>
-                        </div>
-
-                        <div className="flex items-center space-x-4">
-                            {/* Search Bar */}
-                            <div className="relative hidden lg:block">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="text"
-                                    placeholder="Buscar productos, tiendas..."
-                                    className="pl-9 pr-4 py-2 w-64 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                />
-                            </div>
-
-                            {/* Date Selector */}
-                            <select className="bg-gray-50 border border-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer">
-                                <option>Últimos 7 días</option>
-                                <option>Últimos 30 días</option>
-                                <option>Este mes</option>
-                            </select>
-
-                            {/* Icons */}
-                            <button className="relative p-2 text-gray-400 hover:text-gray-600 transition-colors">
-                                <Bell className="w-5 h-5" />
-                                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
-                            </button>
-                            <button className="p-1 border-2 border-transparent hover:border-gray-200 rounded-full transition-all">
-                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-[#3C5ACB]">
-                                    <User className="w-4 h-4" />
-                                </div>
-                            </button>
-                        </div>
-                    </div>
-                </header>
-
-                {/* Scrollable Content Area */}
-                <div className="flex-1 overflow-auto p-8">
-                    <div className="max-w-7xl mx-auto space-y-6">
-                        {/* KPI Cards */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                            {/* Card 1 */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
-                                <p className="text-sm font-medium text-gray-500 mb-1">
-                                    Búsquedas Totales
-                                </p>
-                                <div className="flex items-baseline space-x-2">
-                                    <h3 className="text-2xl font-bold text-gray-900">1,245</h3>
-                                    <span className="text-sm font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
-                                        +12.5% vs sem. pasada
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Card 2 */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
-                                <p className="text-sm font-medium text-gray-500 mb-1">
-                                    Producto Top
-                                </p>
-                                <div className="flex flex-col">
-                                    <h3 className="text-lg font-bold text-gray-900 truncate">
-                                        Acetaminofén
-                                    </h3>
-                                    <span className="text-sm font-medium text-orange-600 mt-1">
-                                        High Demand
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Card 3 */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
-                                <p className="text-sm font-medium text-gray-500 mb-1">
-                                    Precio Promedio
-                                </p>
-                                <div className="flex items-baseline space-x-2">
-                                    <h3 className="text-2xl font-bold text-gray-900">$1.50</h3>
-                                    <span className="text-sm font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
-                                        Estable
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Card 4 */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:shadow-md transition-shadow">
-                                <p className="text-sm font-medium text-gray-500 mb-1">
-                                    Variación Semanal
-                                </p>
-                                <div className="flex items-baseline space-x-2">
-                                    <h3 className="text-2xl font-bold text-green-600">+2.4%</h3>
-                                    <span className="text-sm font-medium text-red-500 bg-red-50 px-1.5 py-0.5 rounded">
-                                        -0.5% en margen
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Central Section: Charts & Map */}
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            {/* Line Chart */}
-                            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col">
-                                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                                    Evolución de Precios (últ. 30 días)
-                                </h2>
-                                <div className="flex-1 w-full min-h-[300px]">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={mockChartData}>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                            <XAxis
-                                                dataKey="date"
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tick={{ fill: "#6B7280", fontSize: 12 }}
-                                                dy={10}
-                                            />
-                                            <YAxis
-                                                yAxisId="left"
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tick={{ fill: "#6B7280", fontSize: 12 }}
-                                                dx={-10}
-                                                domain={["auto", "auto"]}
-                                                unit="$"
-                                            />
-                                            <YAxis
-                                                yAxisId="right"
-                                                orientation="right"
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tick={{ fill: "#6B7280", fontSize: 12 }}
-                                                dx={10}
-                                                domain={["auto", "auto"]}
-                                                unit="Bs"
-                                            />
-                                            <Tooltip
-                                                contentStyle={{
-                                                    borderRadius: "8px",
-                                                    border: "none",
-                                                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-                                                }}
-                                            />
-                                            <Legend verticalAlign="top" height={36} />
-                                            <Line
-                                                yAxisId="left"
-                                                type="monotone"
-                                                dataKey="usd"
-                                                name="Precio USD"
-                                                stroke="#2563eb"
-                                                strokeWidth={2}
-                                                dot={{ r: 4, strokeWidth: 2 }}
-                                                activeDot={{ r: 6 }}
-                                            />
-                                            <Line
-                                                yAxisId="right"
-                                                type="monotone"
-                                                dataKey="ves"
-                                                name="Precio VES"
-                                                stroke="#16a34a"
-                                                strokeWidth={2}
-                                                dot={{ r: 4, strokeWidth: 2 }}
-                                                activeDot={{ r: 6 }}
-                                            />
-                                        </LineChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </div>
-
-                            {/* Heatmap Placeholder */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col">
-                                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                                    Mapa de Calor
-                                </h2>
-                                <div className="flex-1 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-indigo-100 flex flex-col items-center justify-center p-6 text-center min-h-[300px]">
-                                    <div className="w-16 h-16 bg-white rounded-full shadow flex items-center justify-center mb-4">
-                                        <svg
-                                            className="w-8 h-8 text-indigo-500"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                strokeWidth={2}
-                                                d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                                            />
-                                            <path
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                strokeWidth={2}
-                                                d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                                            />
-                                        </svg>
-                                    </div>
-                                    <h3 className="text-lg font-bold text-gray-800">
-                                        Región Principal:
-                                    </h3>
-                                    <p className="text-2xl font-bold text-indigo-600 mt-1">Caracas</p>
-                                    <p className="text-sm text-gray-500 mt-2">
-                                        78% de la demanda actual
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Bottom Table */}
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
-                            <div className="p-5 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                <h2 className="text-lg font-semibold text-gray-900">
-                                    Detalle de Productos
-                                </h2>
-                                <div className="flex items-center space-x-3">
-                                    <button className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm">
-                                        <Filter className="w-4 h-4 mr-2" />
-                                        Filtros
-                                    </button>
-                                    <button className="flex items-center px-3 py-2 text-sm font-medium text-white bg-[#3C5ACB] border border-transparent rounded-lg hover:bg-[#2F47A8] transition-colors shadow-sm">
-                                        <Download className="w-4 h-4 mr-2" />
-                                        Exportar CSV
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50">
-                                        <tr>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Producto
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Tienda
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Precio USD
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Precio VES
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Fecha
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Estado
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
-                                            >
-                                                Acción
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {loading ? (
-                                            <tr>
-                                                <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
-                                                    <div className="flex flex-col items-center justify-center">
-                                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
-                                                        Cargando datos...
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ) : products.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
-                                                    No se encontraron productos.
-                                                </td>
-                                            </tr>
-                                        ) : (
-                                            products.map((item, idx) => (
-                                                <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                                    <td className="px-6 py-4 whitespace-nowrap">
-                                                        <div className="flex items-center">
-                                                            <div className="flex-shrink-0 h-10 w-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500 border border-gray-200">
-                                                                {item.imagen ? (
-                                                                    <Image src={item.imagen} alt={item.nombre || "Product"} width={40} height={40} className="h-full w-full object-cover rounded-lg" />
-                                                                ) : (
-                                                                    <FileText className="h-5 w-5" />
-                                                                )}
-                                                            </div>
-                                                            <div className="ml-4">
-                                                                <div className="text-sm font-medium text-gray-900 truncate max-w-[200px]" title={item.nombre}>
-                                                                    {item.nombre || "Producto sin nombre"}
-                                                                </div>
-                                                                <div className="text-sm text-gray-500">
-                                                                    {item.marca || "Sin marca"}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                                        {item.ofertas?.[0]?.cadena || "Farmatodo"}
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
-                                                        ${(item.ofertas?.[0]?.precio_usd || 0).toFixed(2)}
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                                        Bs {(item.ofertas?.[0]?.precio_ves || 0).toFixed(2)}
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                        {item.fecha ? new Date(item.fecha).toLocaleDateString() : "24/03/2026"}
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap">
-                                                        <span className="px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                                                            Activo
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                        <button className="text-[#3C5ACB] hover:text-blue-900 bg-[#EEF1FD] hover:bg-blue-100 px-3 py-1 rounded-md transition-colors">
-                                                            Ver detalles
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </main>
+      <div className="min-h-screen bg-[#F5F7FF] flex items-center justify-center font-sans p-4">
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-10 max-w-md text-center">
+          <div className="text-5xl mb-4">🏢</div>
+          <h1 className="text-xl font-extrabold text-slate-900 mb-2">No tienes Compi activo</h1>
+          <p className="text-sm text-slate-500 mb-6">
+            Para acceder al dashboard B2B necesitas un plan Compi activo. Solicítalo y nuestro equipo te
+            contacta para activarte en 24-48h.
+          </p>
+          <Link href="/empresas" className="inline-block bg-[#3C5ACB] hover:bg-[#2F47A8] text-white font-bold px-8 py-3 rounded-full transition-colors">
+            Ver planes Compi →
+          </Link>
         </div>
+      </div>
     );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F5F7FF] font-sans text-slate-800">
+      <header className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between sticky top-0 z-40">
+        <Link href="/" className="flex items-center gap-2">
+          <Image src="/logo-blue.png" alt="Compa" width={36} height={36} className="rounded-xl" />
+          <span className="font-extrabold text-xl text-slate-800">Compi</span>
+        </Link>
+        <div className="flex items-center gap-4">
+          {empresa && (
+            <div className="hidden sm:flex items-center gap-3 px-4 py-2 bg-[#F5F7FF] rounded-full">
+              <span className="font-bold text-sm text-slate-700">{empresa.nombre_comercial}</span>
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#3C5ACB] bg-white px-2 py-0.5 rounded-full border border-[#DDE4FA]">
+                {empresa.plan}
+              </span>
+            </div>
+          )}
+          {getUser()?.rol_usuario === "ADMIN" && (
+            <Link href="/admin/b2b" className="text-xs font-bold text-slate-500 hover:text-slate-700 hidden sm:inline">
+              Admin solicitudes
+            </Link>
+          )}
+          <Link href="/perfil" className="text-sm font-bold text-slate-500 hover:text-slate-700">Perfil</Link>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(["resumen","precios","demografia","tendencias","visibilidad"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => cargarTab(t)}
+              className={`px-5 py-2.5 rounded-full font-bold text-sm whitespace-nowrap transition-colors ${
+                tab === t
+                  ? "bg-[#3C5ACB] text-white"
+                  : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+              }`}
+            >
+              {LABELS[t]}
+            </button>
+          ))}
+        </div>
+
+        {errorMsg && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">{errorMsg}</div>
+        )}
+
+        {loading && !dash ? (
+          <div className="text-center py-20 text-slate-400">Cargando datos…</div>
+        ) : (
+          <>
+            {tab === "resumen"     && <TabResumen     data={dash} />}
+            {tab === "precios"     && <TabPrecios     data={precios} />}
+            {tab === "demografia"  && <TabDemografia  data={demo} />}
+            {tab === "tendencias"  && <TabTendencias  data={tend} />}
+            {tab === "visibilidad" && <TabVisibilidad data={vis} empresa={empresa} />}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const LABELS: Record<Tab, string> = {
+  resumen:     "Resumen",
+  precios:     "Precios",
+  demografia:  "Demografía",
+  tendencias:  "Tendencias",
+  visibilidad: "Visibilidad",
+};
+
+/* ── Tabs ─────────────────────────────────────────────────────────────────── */
+
+function TabResumen({ data }: { data: DashboardKPI | null }) {
+  if (!data) return <Skel />;
+  const { kpis, tasa_bcv } = data;
+  return (
+    <div className="space-y-6">
+      <div className="grid sm:grid-cols-3 gap-4">
+        <Kpi label="Consultas este mes (mercado)" valor={kpis.consultas_mes_total.toLocaleString()} />
+        <Kpi label="Menciones de tu cadena" valor={kpis.menciones_mi_cadena_mes.toLocaleString()} />
+        <Kpi label="% de participación" valor={`${kpis.porcentaje_menciones}%`} acento />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4">
+        <Card className="lg:col-span-2">
+          <CardTitle>Tasa BCV — últimos 30 días</CardTitle>
+          <p className="text-sm text-slate-500 mb-3">Actual: <strong>Bs. {tasa_bcv.actual?.toFixed(2) ?? "—"}</strong></p>
+          {tasa_bcv.evolucion.length === 0 ? <Empty inline /> : (
+            <div className="h-64">
+              <ResponsiveContainer>
+                <LineChart data={tasa_bcv.evolucion}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eef0f7" />
+                  <XAxis dataKey="fecha" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="valor" stroke="#3C5ACB" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <CardTitle>Top rubros del mes</CardTitle>
+          {kpis.rubros_top.length === 0 ? (
+            <p className="text-sm text-slate-400">Aún no hay datos clasificados este mes.</p>
+          ) : (
+            <ul className="space-y-2 mt-2">
+              {kpis.rubros_top.map((r) => (
+                <li key={r.rubro} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-2.5">
+                  <span className="text-sm font-bold text-slate-700 capitalize">{formatRubro(r.rubro)}</span>
+                  <span className="text-sm font-extrabold text-[#3C5ACB]">{r.n}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function TabPrecios({ data }: { data: PrecioRubro[] | null }) {
+  if (!data) return <Skel />;
+  if (data.length === 0) return <Empty texto="Aún no hay suficientes precios clasificados." />;
+
+  return (
+    <Card>
+      <CardTitle>Análisis de precios del mercado (USD, últimos 60 días)</CardTitle>
+      <p className="text-sm text-slate-500 mb-4">Por categoría de producto, agregando todas las cadenas monitoreadas.</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+            <tr className="border-b border-slate-100">
+              <th className="text-left py-3 pr-4">Categoría</th>
+              <th className="text-right py-3 pr-4">Productos</th>
+              <th className="text-right py-3 pr-4">Mín</th>
+              <th className="text-right py-3 pr-4">Mediano</th>
+              <th className="text-right py-3 pr-4">Promedio</th>
+              <th className="text-right py-3">Máx</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((r) => (
+              <tr key={r.categoria} className="border-b border-slate-50 hover:bg-slate-50">
+                <td className="py-3 pr-4 font-bold text-slate-700 capitalize">{r.categoria.replace(/_/g, " ")}</td>
+                <td className="py-3 pr-4 text-right text-slate-500">{r.productos}</td>
+                <td className="py-3 pr-4 text-right font-bold text-green-700">${r.precio_min?.toFixed(2)}</td>
+                <td className="py-3 pr-4 text-right text-slate-700">${r.precio_mediano?.toFixed(2)}</td>
+                <td className="py-3 pr-4 text-right text-slate-700">${r.precio_promedio?.toFixed(2)}</td>
+                <td className="py-3 text-right font-bold text-red-700">${r.precio_max?.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function TabDemografia({ data }: { data: Demograficos | null }) {
+  if (!data) return <Skel />;
+  const sinDatos = data.por_sexo.length === 0 && data.por_ciudad.length === 0;
+  if (sinDatos) return <Empty texto="Aún no hay suficientes datos demográficos de usuarios registrados." />;
+
+  return (
+    <div className="grid lg:grid-cols-3 gap-4">
+      <Card>
+        <CardTitle>Por sexo (90d)</CardTitle>
+        {data.por_sexo.length === 0 ? <Empty inline /> : (
+          <div className="h-64">
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie data={data.por_sexo} dataKey="n" nameKey="sexo" outerRadius={80} label={(e: { sexo: string; n: number }) => `${e.sexo}: ${e.n}`}>
+                  {data.por_sexo.map((_, i) => <Cell key={i} fill={PALETA[i % PALETA.length]} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Top ciudades (90d)</CardTitle>
+        {data.por_ciudad.length === 0 ? <Empty inline /> : (
+          <ul className="space-y-1.5 mt-2 max-h-64 overflow-y-auto">
+            {data.por_ciudad.map((c) => (
+              <li key={c.ciudad} className="flex justify-between bg-slate-50 rounded-lg px-3 py-2 text-sm">
+                <span className="font-bold text-slate-700 truncate">{c.ciudad}</span>
+                <span className="font-extrabold text-[#3C5ACB] ml-2">{c.n}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Top estados (90d)</CardTitle>
+        {data.por_estado.length === 0 ? <Empty inline /> : (
+          <ul className="space-y-1.5 mt-2 max-h-64 overflow-y-auto">
+            {data.por_estado.map((c) => (
+              <li key={c.estado} className="flex justify-between bg-slate-50 rounded-lg px-3 py-2 text-sm">
+                <span className="font-bold text-slate-700 truncate">{c.estado}</span>
+                <span className="font-extrabold text-[#3C5ACB] ml-2">{c.n}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function TabTendencias({ data }: { data: Tendencias | null }) {
+  if (!data) return <Skel />;
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardTitle>Evolución mensual del mercado (12m)</CardTitle>
+        {data.evolucion_mensual.length === 0 ? <Empty inline /> : (
+          <div className="h-72">
+            <ResponsiveContainer>
+              <LineChart data={data.evolucion_mensual}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef0f7" />
+                <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="consultas" stroke="#3C5ACB" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Top 15 rubros (90d)</CardTitle>
+        {data.top_rubros.length === 0 ? <Empty inline /> : (
+          <div className="h-96">
+            <ResponsiveContainer>
+              <BarChart data={data.top_rubros.map(r => ({ ...r, rubro: formatRubro(r.rubro) }))} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef0f7" />
+                <XAxis type="number" tick={{ fontSize: 11 }} />
+                <YAxis type="category" dataKey="rubro" tick={{ fontSize: 11 }} width={140} />
+                <Tooltip />
+                <Bar dataKey="consultas" fill="#3C5ACB" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function TabVisibilidad({ data, empresa }: { data: Visibilidad | null; empresa: Empresa | null }) {
+  if (!data) return <Skel />;
+  return (
+    <div className="space-y-4">
+      <div className="grid sm:grid-cols-3 gap-4">
+        <Kpi label="Clicks 30d (total)" valor={data.clicks_30d.total.toLocaleString()} />
+        <Kpi label="Clicks 30d → Web" valor={data.clicks_30d.web.toLocaleString()} />
+        <Kpi label="Clicks 30d → WhatsApp" valor={data.clicks_30d.whatsapp.toLocaleString()} />
+      </div>
+
+      <Card>
+        <CardTitle>Menciones mensuales de {empresa?.nombre_comercial || "tu cadena"} (12m)</CardTitle>
+        {data.menciones_mensual.length === 0 ? <Empty inline texto="Aún no hay menciones registradas. Las consultas nuevas ya se están clasificando." /> : (
+          <div className="h-64">
+            <ResponsiveContainer>
+              <LineChart data={data.menciones_mensual}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef0f7" />
+                <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="menciones" stroke="#DDDD4A" strokeWidth={3} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Ranking del mes — menciones por cadena</CardTitle>
+        {data.ranking_cadenas.length === 0 ? <Empty inline /> : (
+          <div className="h-64">
+            <ResponsiveContainer>
+              <BarChart data={data.ranking_cadenas}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef0f7" />
+                <XAxis dataKey="cadena" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Bar dataKey="menciones" radius={[6, 6, 0, 0]}>
+                  {data.ranking_cadenas.map((c, i) => (
+                    <Cell key={i} fill={c.cadena === empresa?.nombre_comercial ? "#3C5ACB" : "#9EB1F0"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ── Helpers UI ───────────────────────────────────────────────────────────── */
+
+function Card({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={`bg-white rounded-3xl border border-slate-100 shadow-sm p-6 ${className || ""}`}>{children}</div>;
+}
+function CardTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="font-extrabold text-slate-800 mb-3">{children}</h2>;
+}
+function Kpi({ label, valor, acento }: { label: string; valor: string; acento?: boolean }) {
+  return (
+    <div className={`rounded-3xl border shadow-sm p-6 ${acento ? "bg-[#3C5ACB] border-[#3C5ACB] text-white" : "bg-white border-slate-100"}`}>
+      <p className={`text-xs font-bold uppercase tracking-widest mb-2 ${acento ? "text-blue-200" : "text-slate-400"}`}>{label}</p>
+      <p className="text-3xl font-extrabold">{valor}</p>
+    </div>
+  );
+}
+function Skel() { return <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-slate-400 text-sm">Cargando…</div>; }
+function Empty({ texto, inline }: { texto?: string; inline?: boolean }) {
+  return <div className={`text-slate-400 text-sm ${inline ? "py-4 text-center" : "bg-white rounded-3xl border border-slate-100 p-10 text-center"}`}>{texto || "Sin datos aún."}</div>;
+}
+function formatRubro(r: string): string {
+  return r.replace(/^farmacia_/, "💊 ").replace(/_/g, " ");
 }

@@ -14,8 +14,7 @@ export default function LandingPage() {
           <nav className="hidden md:flex items-center gap-10 text-sm font-semibold text-slate-600">
             <Link href="#compradores" className="hover:text-[#3C5ACB] transition-colors">Para Compradores</Link>
             <Link href="/planes" className="hover:text-[#3C5ACB] transition-colors">Planes</Link>
-            <Link href="#empresas" className="hover:text-[#3C5ACB] transition-colors">Para Empresas</Link>
-            <Link href="#precios" className="hover:text-[#3C5ACB] transition-colors">Precios B2B</Link>
+            <Link href="/empresas" className="hover:text-[#3C5ACB] transition-colors">Compi (Empresas)</Link>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/auth" className="text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors">
@@ -121,7 +120,7 @@ export default function LandingPage() {
               <div className="text-xs font-bold tracking-widest text-[#DDDD4A] uppercase">Para Retailers y Marcas</div>
               <h2 className="text-4xl font-extrabold">Inteligencia de mercado a tu alcance.</h2>
               <p className="text-blue-100">Monitorea a tu competencia, detecta oportunidades de precio y optimiza tus márgenes con datos en tiempo real.</p>
-              <Link href="#contacto" className="inline-flex px-6 py-3 bg-[#DDDD4A] text-[#1E2E7A] rounded-full font-bold text-sm hover:bg-[#C8C830] transition-colors">
+              <Link href="/empresas" className="inline-flex px-6 py-3 bg-[#DDDD4A] text-[#1E2E7A] rounded-full font-bold text-sm hover:bg-[#C8C830] transition-colors">
                 Ver Planes para Empresas →
               </Link>
             </div>
@@ -158,8 +157,9 @@ export default function LandingPage() {
               <h4 className="font-bold text-slate-800 mb-4 text-sm">Producto</h4>
               <ul className="space-y-3 text-sm text-slate-500">
                 <li><a href="#compradores" className="hover:text-[#3C5ACB]">Para Compradores</a></li>
-                <li><a href="#empresas" className="hover:text-[#3C5ACB]">Para Empresas</a></li>
-                <li><a href="#precios" className="hover:text-[#3C5ACB]">Precios B2B</a></li>
+                <li><Link href="/planes" className="hover:text-[#3C5ACB]">Planes Compa</Link></li>
+                <li><Link href="/empresas" className="hover:text-[#3C5ACB]">Compi (Empresas)</Link></li>
+                <li><Link href="/empresas/solicitar" className="hover:text-[#3C5ACB]">Solicitar acceso</Link></li>
               </ul>
             </div>
             <div>
